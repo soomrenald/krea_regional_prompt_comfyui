@@ -1,0 +1,25 @@
+[project]
+name = "comfyui-k2-region-studio"
+version = "0.1.0"
+description = "A graph-native ComfyUI app for Krea 2 regional prompting, regional LoRAs, projector control, face detail, and upscaling."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "onnxruntime>=1.20",
+    "Pillow>=10.0",
+]
+
+[project.urls]
+Repository = "https://github.com/soomrenald/krea_region_project"
+
+[tool.comfy]
+PublisherId = "wolfhard"
+DisplayName = "K2 Region Studio"
+Icon = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
