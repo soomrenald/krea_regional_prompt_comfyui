@@ -45,3 +45,10 @@ def test_studio_and_bare_node_ids_are_registered():
         "K2RegionalDecodeComposite",
     }
     assert all(f'node_id="{node_id}"' in node_sources for node_id in expected)
+
+
+def test_sidebar_preserves_the_active_editor_pane_across_renders():
+    source = (ROOT / "web" / "k2_region_studio.js").read_text()
+    assert 'this.activePane = "Regions"' in source
+    assert "this.activePane = name" in source
+    assert "(activeButton || tabs.firstChild)?.click()" in source

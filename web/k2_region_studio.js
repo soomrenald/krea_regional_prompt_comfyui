@@ -55,6 +55,7 @@ class RegionStudio {
     this.node = null;
     this.config = blankConfig();
     this.selected = 0;
+    this.activePane = "Regions";
     this.drag = null;
     this.loraNames = [];
     this.renderShell();
@@ -136,6 +137,7 @@ class RegionStudio {
     }
     const tabs = h("nav", { class: "k2-tabs" });
     const pages = h("div", {});
+    let activeButton = null;
     for (const [name, renderer] of [
       ["Regions", () => this.regionsPage()],
       ["LoRAs", () => this.lorasPage()],
@@ -145,14 +147,16 @@ class RegionStudio {
     ]) {
       const button = h("button", {}, name);
       button.onclick = () => {
+        this.activePane = name;
         tabs.querySelectorAll("button").forEach((item) => item.classList.remove("active"));
         button.classList.add("active");
         pages.replaceChildren(renderer());
       };
+      if (name === this.activePane) activeButton = button;
       tabs.append(button);
     }
     this.body.append(tabs, pages);
-    tabs.firstChild.click();
+    (activeButton || tabs.firstChild)?.click();
   }
 
   regionsPage() {

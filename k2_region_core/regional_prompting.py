@@ -882,18 +882,53 @@ def _apply_subject_competition(
 
 
 def krea_prompt_token_count(tokenized: dict[str, list[list[tuple]]]) -> int:
-    """Count prompt-owned lanes after Krea's fixed Qwen wrapper prefix is removed."""
+    """Count prompt-owned lanes across full and stripped Krea Qwen wrappers.
+
+    ComfyUI loaders do not all expose tokenization at the same stage.  The native
+    Krea tokenizer currently returns the complete chat template, while some
+    wrappers remove ``<|im_end|>`` or the entire template tail before returning
+    token/weight pairs.  The Krea encoder still produces valid conditioning in
+    each case, so regional span binding must not reject the stripped variants.
+    """
     if not tokenized:
         raise ValueError("Krea tokenization returned no token groups")
-    batches = next(iter(tokenized.values()))
+
+    im_start = 151644
+    im_end = 151645
+    newline = 198
+
+    def ids(batches: list[list[tuple]]) -> list[object]:
+        if len(batches) != 1:
+            return []
+        return [pair[0] for pair in batches[0]]
+
+    def is_token(value: object, token_id: int) -> bool:
+        return isinstance(value, Integral) and value == token_id
+
+    # Prefer the Krea/Qwen lane when a loader returns more than one token group.
+    # Falling back to the first group preserves compatibility with renamed keys.
+    candidates = list(tokenized.values())
+    batches = next(
+        (
+            candidate
+            for candidate in candidates
+            if sum(is_token(token, im_start) for token in ids(candidate)) >= 2
+        ),
+        candidates[0],
+    )
     if len(batches) != 1:
         raise ValueError("Krea unified prompting requires one token batch")
     pairs = batches[0]
+    token_ids = [pair[0] for pair in pairs]
+
+    # A loader may expose the sequence after removing the complete template.
+    if not any(is_token(token, im_start) or is_token(token, im_end) for token in token_ids):
+        return len(pairs)
+
     second_im_start: int | None = None
     seen = 0
-    for index, pair in enumerate(pairs):
-        token = pair[0]
-        if isinstance(token, Integral) and token == 151644:
+    for index, token in enumerate(token_ids):
+        if is_token(token, im_start):
             seen += 1
             if seen == 2:
                 second_im_start = index
@@ -904,14 +939,26 @@ def krea_prompt_token_count(tokenized: dict[str, list[list[tuple]]]) -> int:
     prompt_start = second_im_start + 1
     if (
         len(pairs) > prompt_start + 1
-        and pairs[prompt_start][0] == 872
-        and pairs[prompt_start + 1][0] == 198
+        and is_token(token_ids[prompt_start], 872)
+        and is_token(token_ids[prompt_start + 1], newline)
     ):
         prompt_start += 2
     for index in range(prompt_start, len(pairs)):
-        if pairs[index][0] == 151645:
+        if is_token(token_ids[index], im_end):
             return index - prompt_start
-    raise ValueError("Krea Qwen wrapper is missing the user <|im_end|> token")
+        if is_token(token_ids[index], im_start):
+            # Partially stripped wrappers can leave ``\n<|im_start|>assistant``.
+            prompt_end = index
+            if prompt_end > prompt_start and is_token(token_ids[prompt_end - 1], newline):
+                prompt_end -= 1
+            return prompt_end - prompt_start
+
+    # With no remaining chat delimiter, the wrapper has returned the prompt tail
+    # directly.  Ignore Qwen padding if a third-party loader appended any.
+    prompt_end = len(pairs)
+    while prompt_end > prompt_start and is_token(token_ids[prompt_end - 1], 151643):
+        prompt_end -= 1
+    return prompt_end - prompt_start
 
 
 def region_definitions_from_payload(items: list[dict]) -> tuple[RegionDefinition, ...]:
