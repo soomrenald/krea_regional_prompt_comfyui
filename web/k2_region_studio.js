@@ -7,6 +7,7 @@ style.href = new URL("./k2_region_studio.css", import.meta.url).href;
 document.head.append(style);
 
 const NODE_TYPE = "K2RegionStudio";
+const SAMPLER_NODE_TYPE = "K2RegionalSampler";
 const palette = ["#f97316", "#22c55e", "#38bdf8", "#c084fc", "#f43f5e", "#facc15"];
 
 const blankConfig = () => ({
@@ -48,6 +49,21 @@ const h = (tag, attrs = {}, ...children) => {
 };
 
 const widget = (node, name) => node?.widgets?.find((item) => item.name === name);
+
+const repairShiftedSamplerDefaults = (node) => {
+  const cfg = widget(node, "cfg");
+  const sampler = widget(node, "sampler_name");
+  const scheduler = widget(node, "scheduler");
+  const denoise = widget(node, "denoise");
+  if (typeof cfg?.value !== "string" || typeof sampler?.value !== "string" || typeof scheduler?.value !== "number") return;
+  const samplerValue = cfg.value;
+  const schedulerValue = sampler.value;
+  const denoiseValue = scheduler.value;
+  cfg.value = 1;
+  sampler.value = samplerValue;
+  scheduler.value = schedulerValue;
+  if (denoise) denoise.value = denoiseValue;
+};
 
 class RegionStudio {
   constructor(root) {
@@ -377,6 +393,19 @@ app.registerExtension({
     });
   },
   beforeRegisterNodeDef(nodeType, nodeData) {
+    if (nodeData.name === SAMPLER_NODE_TYPE) {
+      const created = nodeType.prototype.onNodeCreated;
+      nodeType.prototype.onNodeCreated = function () {
+        created?.apply(this, arguments);
+        repairShiftedSamplerDefaults(this);
+      };
+      const configured = nodeType.prototype.onConfigure;
+      nodeType.prototype.onConfigure = function () {
+        configured?.apply(this, arguments);
+        repairShiftedSamplerDefaults(this);
+      };
+      return;
+    }
     if (nodeData.name !== NODE_TYPE) return;
     const created = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {

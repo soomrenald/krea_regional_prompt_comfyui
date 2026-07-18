@@ -149,8 +149,16 @@ class K2RegionalSampler(io.ComfyNode):
                 io.Int.Input("seed", default=0, min=0, max=0xFFFFFFFFFFFFFFFF),
                 io.Int.Input("steps", default=20, min=1, max=10000),
                 io.Float.Input("cfg", default=1.0, min=0.0, max=100.0, step=0.1),
-                io.Combo.Input("sampler_name", options=comfy.samplers.KSampler.SAMPLERS),
-                io.Combo.Input("scheduler", options=comfy.samplers.KSampler.SCHEDULERS),
+                io.Combo.Input(
+                    "sampler_name",
+                    options=comfy.samplers.KSampler.SAMPLERS,
+                    default="euler",
+                ),
+                io.Combo.Input(
+                    "scheduler",
+                    options=comfy.samplers.KSampler.SCHEDULERS,
+                    default="simple",
+                ),
                 io.Float.Input("denoise", default=1.0, min=0.0, max=1.0, step=0.01),
                 K2Plan.Input("region_plan", optional=True),
             ],

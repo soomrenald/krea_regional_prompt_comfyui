@@ -52,3 +52,12 @@ def test_sidebar_preserves_the_active_editor_pane_across_renders():
     assert 'this.activePane = "Regions"' in source
     assert "this.activePane = name" in source
     assert "(activeButton || tabs.firstChild)?.click()" in source
+
+
+def test_regional_sampler_declares_and_repairs_expected_defaults():
+    backend = (ROOT / "k2_region_comfy" / "nodes.py").read_text()
+    frontend = (ROOT / "web" / "k2_region_studio.js").read_text()
+    assert 'default="euler"' in backend
+    assert 'default="simple"' in backend
+    assert "repairShiftedSamplerDefaults" in frontend
+    assert "cfg.value = 1" in frontend
