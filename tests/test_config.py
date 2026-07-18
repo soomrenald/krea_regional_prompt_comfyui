@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from krea_region_project_comfyapp.k2_region_comfy.config import (
+from krea_regional_prompt_comfyui.k2_region_comfy.config import (
     default_config_json,
     parse_studio_config,
 )

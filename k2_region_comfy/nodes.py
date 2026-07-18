@@ -9,6 +9,7 @@ from comfy_api.latest import ComfyExtension, io
 from .backend import RuntimeState, prepare_studio
 from .config import default_config_json, parse_studio_config
 from .face_refine import refine_faces
+from .bare_nodes import BARE_NODE_CLASSES
 
 
 K2Plan = io.Custom("K2_REGION_PLAN")
@@ -265,7 +266,14 @@ class K2PostUpscale(io.ComfyNode):
 class K2RegionExtension(ComfyExtension):
     @override
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        return [K2KreaLoader, K2RegionStudio, K2RegionalSampler, K2FaceDetail, K2PostUpscale]
+        return [
+            K2KreaLoader,
+            K2RegionStudio,
+            K2RegionalSampler,
+            K2FaceDetail,
+            K2PostUpscale,
+            *BARE_NODE_CLASSES,
+        ]
 
 
 __all__ = ["K2RegionExtension"]

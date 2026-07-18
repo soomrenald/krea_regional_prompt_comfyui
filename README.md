@@ -45,6 +45,8 @@ The `K2 Region Studio` outputs remain ordinary ComfyUI types. Its patched `MODEL
 
 The optional `K2 Regional Face Detail` node accepts a normal `IMAGE`, `MODEL`, `CLIP`, and `VAE`. The optional `K2 Post Upscale` accepts a normal `UPSCALE_MODEL`, including models loaded with ComfyUI’s `Load Upscale Model` node.
 
+Two graph styles are included. The Studio nodes provide the integrated app-like editor and the complete high-level workflow. The **bare regional LoRA** nodes provide explicit, wireable region masks and LoRA stacks for users who want every routing stage visible in the graph. Both styles use native ComfyUI `MODEL`, `CLIP`, `VAE`, `CONDITIONING`, `LATENT`, `IMAGE`, `MASK`, and `UPSCALE_MODEL` connections wherever ComfyUI already defines them.
+
 ## Sidebar editor
 
 The sidebar configuration is serialized into the node’s `region_config` widget, and therefore into the normal ComfyUI workflow JSON and generated-image workflow metadata. No separate project format is required.
@@ -91,11 +93,24 @@ You can supply another path in the `detector_path` widget. The pass detects face
 
 ## Nodes
 
+### Studio and app nodes
+
 - `K2 Load Krea 2`: native Krea 2 `MODEL`, `CLIP`, and `VAE` loader.
 - `K2 Region Studio`: compiles the region project and returns standard graph objects plus a `K2_REGION_PLAN` control object and reports.
 - `K2 Regional Sampler`: standard KSampler controls plus regional denoising progress updates.
 - `K2 Regional Face Detail`: optional assigned-face crop refinement.
 - `K2 Post Upscale`: exact Lanczos resizing or a normal ComfyUI neural upscale model.
+
+### Bare graph nodes
+
+- `K2 BBox To Regional Mask`: accepts detector/KJ bounding boxes and produces a normal `MASK`, a reusable region object, and a debug image.
+- `K2 Regional Character LoRA`: binds a native positive/negative conditioning pair and a ComfyUI LoRA filename to one region, with strength and denoising-range controls.
+- `K2 Regional LoRA Stack 3`: combines up to three region-bound LoRAs with explicit overlap behavior.
+- `K2 Regional Layer LoRA Apply`: applies a regional stack to a native `MODEL` branch with selectable injection targets.
+- `K2 Regional Attention LoRA Sampler`: exposes the full sampler, regional execution, outside-pinning, and debug controls.
+- `K2 Regional Decode Composite`: decodes and safely composites regional/base latent results through a native `VAE`.
+
+The bare workflow is intentionally composable with native loaders, text encoders, detectors, samplers, VAE nodes, preview/save nodes, and third-party nodes that use standard ComfyUI types. The sidebar-driven `K2 Region Studio` is the app version: it provides the drawable labeled-region canvas and the same prompts, prompt emphases, regional LoRA assignments, spatial controls, projector controls, face-detail settings, and JSON import/export stored inside the workflow.
 
 ## Compatibility notes
 
