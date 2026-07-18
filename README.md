@@ -10,8 +10,8 @@ Copy or clone this folder into the active ComfyUI `custom_nodes` directory:
 
 ```bash
 cd /path/to/ComfyUI/custom_nodes
-git clone <repository-url> krea_region_project_comfyapp
-cd krea_region_project_comfyapp
+git clone https://github.com/soomrenald/krea_regional_prompt_comfyui.git
+cd krea_regional_prompt_comfyui
 /path/to/ComfyUI/python -m pip install -r requirements.txt
 ```
 
