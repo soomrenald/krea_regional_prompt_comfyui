@@ -56,7 +56,7 @@ The sidebar configuration is serialized into the node’s `region_config` widget
 - **Tuning** exposes inside/outside spatial bias, falloff, subject competition/fill, late-step relaxation, LoRA-delta adaptation, Krea projector settings, and face-detail settings.
 - **JSON** provides lossless import/export and direct access to token emphasis arrays, custom projector vectors, and future fields.
 
-Regional LoRAs use unfused forward adapters and gate each LoRA’s prediction delta by the compiled text and image token lanes. The base FP8 weights are not rewritten. Prompt attention may feather outside a box for scene coherence; regional LoRA deltas remain strictly zero outside their assigned lanes.
+Regional LoRAs use unfused forward adapters, and the base FP8 weights are not rewritten. Standard regional routing is image-token-only: it applies query, gate, attention-output, and MLP deltas only to image tokens intersecting the assigned boxes. Text-fusion and attention key/value targets are omitted for standard regional routes because those paths are shared with every image query and cannot be made spatially local by masking their linear output. Character-identity routing retains its dedicated anchored regional-text behavior.
 
 ## Any GPU size: tuning and memory
 
@@ -165,9 +165,9 @@ The outputs are the patched model, original clip, compiled positive/negative con
 | `+ LoRA` | — | Adds an assignment using ComfyUI's current `models/loras` inventory. |
 | `Model` | First available LoRA | LoRA file to validate against and apply to the active Krea model. Incompatible namespaces are reported instead of silently doing nothing. |
 | `Strength` | `1.0` | Model-delta multiplier from `-4` to `4`. Zero disables the assignment; negative values invert its learned delta. |
-| `Routing` | `standard` | `standard` uses normal global/regional routing. `character_identity` requires Global scope off, at least one selected region, and a trigger phrase; it adds identity anchors while retaining the full regional text and image gates. |
+| `Routing` | `standard` | With Global scope off, `standard` is image-token-only and omits text-fusion plus attention key/value targets that would broadcast the effect. `character_identity` requires at least one selected region and a trigger phrase; it retains the established anchored regional-text behavior. |
 | `Global scope` | Enabled | Applies the LoRA to all text and image lanes. Disable it to expose the region checklist and use strict regional routing. |
-| `Regions` | None | Union of named regions receiving a non-global LoRA. Its text deltas are limited to those compiled prompt spans and its image deltas are strictly zero outside their pixel boxes. |
+| `Regions` | None | Union of named regions receiving a non-global LoRA. Standard-routing deltas are enabled only on image tokens intersecting these strict pixel boxes. |
 | `Trigger phrase` | Empty | Character activation phrase used by `character_identity` routing. It must be non-empty in that mode and should match the phrase learned during LoRA training. |
 
 ### Sidebar: Emphasis
@@ -341,6 +341,7 @@ Outputs are regional samples, base samples, the union mask, and a text debug rep
 
 - The spatial override occupies ComfyUI’s `optimized_attention_override` hook. Do not put another node that claims the same hook on the same model branch; branch before applying either override.
 - Krea regional LoRAs are validated against the active Krea model namespace. A LoRA for another architecture is rejected instead of being silently applied to zero layers.
+- Standard regional routes deliberately omit text-fusion and attention key/value adapter targets; the report lists how many compatible targets were skipped for single-pass spatial locality. Global and character-identity routes retain their documented target behavior.
 - Global negative conditioning is output normally. Region-local negative text is preserved in workflow configuration, but the current Krea Turbo CFG-free path has no separate regional negative branch.
 - Cancel, queue, history, workflow embedding, output naming, model unloading, previews, and resource monitoring are provided by ComfyUI.
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..k2_region_core.lora import (
+    CHARACTER_IDENTITY_LORA_ROUTING,
     adapter_prefixes,
     align_krea_lora_state_dict,
     inspect_lora_header,
@@ -17,7 +18,11 @@ from ..k2_region_core.projector import (
     projector_token_delta_mask,
     validate_projector_values,
 )
-from ..k2_region_core.regional_lora import LoraDeltaRoute, compile_lora_delta_routes
+from ..k2_region_core.regional_lora import (
+    LoraDeltaRoute,
+    compile_lora_delta_routes,
+    route_allows_adapter_target,
+)
 from ..k2_region_core.regional_prompting import (
     BoundRegionalPromptPlan,
     krea_prompt_token_count,
@@ -409,6 +414,7 @@ def apply_loras(
     )
     route_map = {route.lora_id: route for route in routes}
     target_entries: dict[str, list[tuple[Any, LoraDeltaRoute]]] = {}
+    skipped_targets: dict[str, list[str]] = {}
     reports: list[dict[str, Any]] = []
     metadata_items = []
     for specification in specifications:
@@ -423,9 +429,21 @@ def apply_loras(
             )
         route = route_map[specification["id"]]
         for key, adapter in patches.items():
-            target_entries.setdefault(key, []).append((adapter, route))
+            if route_allows_adapter_target(route, str(key)):
+                target_entries.setdefault(key, []).append((adapter, route))
+            else:
+                skipped_targets.setdefault(route.lora_id, []).append(str(key))
         report["status"] = "applied_global" if route.global_scope else "applied_regional"
-        report["application_mode"] = "unfused_token_delta_gate"
+        report["application_mode"] = (
+            "unfused_token_delta_gate"
+            if route.global_scope
+            or route.routing_mode == CHARACTER_IDENTITY_LORA_ROUTING
+            else "unfused_image_token_local_delta_gate"
+        )
+        skipped = skipped_targets.get(route.lora_id, [])
+        report["applied_model_targets"] = len(patches) - len(skipped)
+        report["locality_skipped_targets"] = len(skipped)
+        report["locality_skipped_target_examples"] = skipped[:8]
         report["route"] = route.summary()
         reports.append(report)
         if metadata:

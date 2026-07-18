@@ -30,8 +30,8 @@ const HELP = {
   lora_model: "LoRA file applied by this assignment.",
   lora_strength: "Model-delta multiplier from -4 to 4; zero disables the assignment and negative values invert it.",
   lora_global: "Apply across all text and image tokens instead of restricting the LoRA to selected regions.",
-  lora_routing: "Standard applies normal routing; character identity requires Global scope off, selected regions, and a trigger phrase.",
-  lora_regions: "Regions whose prompt-token spans and strict pixel boxes receive this LoRA delta.",
+  lora_routing: "With Global scope off, Standard is image-token-only and omits text-fusion plus attention key/value targets that would broadcast the effect. Character identity retains its anchored regional-text behavior.",
+  lora_regions: "Strict pixel boxes whose image tokens receive a Standard regional LoRA delta.",
   lora_trigger: "Character trigger phrase appended to an assigned regional clause when character-identity routing is selected in JSON.",
   emphasis_add: "Add an exact-phrase emphasis rule.",
   emphasis_scope: "Prompt section searched for the exact phrase: global prompt or one named region.",
@@ -363,14 +363,14 @@ class RegionStudio {
         h("div", { class: "k2-card-head" }, h("strong", {}, `LoRA ${index + 1}`), h("button", { title: "Delete this LoRA assignment.", onClick: () => { this.config.loras.splice(index, 1); this.commit(); this.render(); } }, "×")),
         h("label", { title: HELP.lora_model }, "Model", nameInput),
         h("label", { title: HELP.lora_strength }, "Strength", h("input", { type: "number", min: -4, max: 4, step: .05, value: lora.strength, onInput: (e) => { lora.strength = Number(e.target.value); this.commit(); } })),
-        h("label", { title: HELP.lora_routing }, "Routing", h("select", { onChange: (e) => { lora.routing_mode = e.target.value; this.commit(); } },
+        h("label", { title: HELP.lora_routing }, "Routing", h("select", { onChange: (e) => { lora.routing_mode = e.target.value; this.commit(); this.render(); } },
           ...["standard", "character_identity"].map((value) => h("option", { value, selected: value === (lora.routing_mode || "standard") }, value)))),
         h("label", { title: HELP.lora_global }, h("input", { type: "checkbox", checked: lora.global, onChange: (e) => { lora.global = e.target.checked; this.commit(); this.render(); } }), " Global scope"),
         !lora.global && h("fieldset", { title: HELP.lora_regions }, h("legend", {}, "Regions"), ...this.config.regions.map((region) => h("label", { title: `Apply this LoRA to ${region.name}.` }, h("input", {
           type: "checkbox", checked: (lora.region_ids || []).includes(region.id),
           onChange: (e) => { const ids = new Set(lora.region_ids || []); e.target.checked ? ids.add(region.id) : ids.delete(region.id); lora.region_ids = [...ids]; this.commit(); },
         }), region.name))),
-        h("label", { title: HELP.lora_trigger }, "Trigger phrase", h("input", { value: lora.trigger_phrase || "", onInput: (e) => { lora.trigger_phrase = e.target.value; this.commit(); } })),
+        lora.routing_mode === "character_identity" && h("label", { title: HELP.lora_trigger }, "Trigger phrase", h("input", { value: lora.trigger_phrase || "", onInput: (e) => { lora.trigger_phrase = e.target.value; this.commit(); } })),
       ));
     });
     return page;
