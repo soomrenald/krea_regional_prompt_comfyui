@@ -9,6 +9,61 @@ document.head.append(style);
 const NODE_TYPE = "K2RegionStudio";
 const SAMPLER_NODE_TYPE = "K2RegionalSampler";
 const palette = ["#f97316", "#22c55e", "#38bdf8", "#c084fc", "#f43f5e", "#facc15"];
+const HELP = {
+  "tab.Regions": "Draw labeled regions and edit the global and per-region prompts.",
+  "tab.LoRAs": "Assign LoRA files globally or to selected regions.",
+  "tab.Emphasis": "Boost an exact phrase occurrence in the global prompt or one region.",
+  "tab.Tuning": "Tune spatial attention, projector behavior, and face refinement.",
+  "tab.JSON": "Inspect, copy, or replace the complete portable Studio configuration.",
+  global_prompt: "Scene-wide positive description. Regional clauses are compiled after this text.",
+  global_negative: "Scene-wide negative prompt used by the main and face-detail conditioning.",
+  add_region: "Add a draggable region with a unique ID and descending default priority.",
+  canvas: "Drag inside a box to move it; drag its lower-right handle to resize it.",
+  region_name: "Human-readable label used in the compiled spatial instructions and reports.",
+  region_enabled: "Include this region in compilation and face assignment. Remove it from regional LoRA assignments before disabling it.",
+  region_prompt: "Description that should appear inside this region.",
+  identity_prompt: "Face-specific identity description protected from projector changes and reused by Face Detail.",
+  region_negative: "Region-local negative text stored in the project; Krea Turbo currently uses the global negative branch.",
+  priority: "Higher values compile first and get first chance to claim an ambiguous detected face; this is not a strength or z-index.",
+  role: "auto treats wide boxes as background; subject enables competition/fill; background uses softer outside penalties.",
+  lora_add: "Add a LoRA assignment using a file from ComfyUI/models/loras.",
+  lora_model: "LoRA file applied by this assignment.",
+  lora_strength: "Model-delta multiplier from -4 to 4; zero disables the assignment and negative values invert it.",
+  lora_global: "Apply across all text and image tokens instead of restricting the LoRA to selected regions.",
+  lora_routing: "Standard applies normal routing; character identity requires Global scope off, selected regions, and a trigger phrase.",
+  lora_regions: "Regions whose prompt-token spans and strict pixel boxes receive this LoRA delta.",
+  lora_trigger: "Character trigger phrase appended to an assigned regional clause when character-identity routing is selected in JSON.",
+  emphasis_add: "Add an exact-phrase emphasis rule.",
+  emphasis_scope: "Prompt section searched for the exact phrase: global prompt or one named region.",
+  emphasis_phrase: "Case-sensitive exact text to emphasize; it must exist in the selected scope.",
+  emphasis_strength: "Additional spatial attention boost for the phrase, from 0 (none) to 2 (strong).",
+  emphasis_occurrence: "Zero-based match index: 0 is the first occurrence, 1 the second, and so on.",
+  "spatial.enabled": "Enable regional spatial-attention bias and phrase emphasis.",
+  "spatial.strength": "Positive attention-logit bias inside each region; higher values bind its text more strongly to the box.",
+  "spatial.outside_penalty": "Negative attention-logit bias outside a subject region; higher values reduce prompt leakage.",
+  "spatial.falloff_pixels": "Distance over which attention guidance fades beyond region edges; zero makes a hard edge.",
+  "spatial.late_step_scale": "Fraction of spatial strength retained at the final denoising step after relaxation begins.",
+  "spatial.subject_competition": "Divide ownership where subject regions overlap so they compete instead of fully stacking.",
+  "spatial.subject_fill": "Use stronger coverage toward subject-box edges to reduce unclaimed space inside a subject region.",
+  "spatial.lora_delta_adaptation": "Adjust per-region spatial strength from observed LoRA-delta energy while sampling.",
+  "spatial.lora_delta_adaptation_gain": "Maximum correction gain used when LoRA-delta adaptation balances regional spatial strength.",
+  "projector.enabled": "Apply a selected 12-value delta to Krea's text-fusion projector.",
+  "projector.preset": "Named projector-vector preset; custom values can be edited in the JSON pane.",
+  "projector.multiplier": "Signed scale applied to every projector preset value; zero disables its effect.",
+  "projector.identity_protection": "Reduce projector changes on face-identity prompt tokens: 0 applies fully, 1 protects completely.",
+  "face_detail.enabled": "Enable the separate detector-driven face crop refinement node when it receives this region plan.",
+  "face_detail.steps": "Denoising iterations for each assigned face crop.",
+  "face_detail.denoise": "Face-crop denoise fraction; lower values preserve the original face structure.",
+  "face_detail.crop_size": "Square pixel resolution used while refining each face crop.",
+  "face_detail.padding": "Multiplier expanding the detected face box before it is made square and cropped.",
+  "face_detail.feather": "Fractional edge width used to soften the refined crop mask during compositing.",
+  "face_detail.blend": "Opacity of the refined crop over the source image; 0 keeps the source and 1 uses the refinement.",
+  "face_detail.lora_scale": "Extra multiplier applied to region-assigned LoRAs during face refinement.",
+  "face_detail.detector_threshold": "Minimum NanoDet face confidence accepted for refinement; higher values reject uncertain detections.",
+  json: "Complete workflow-stored configuration, including advanced fields not shown as sidebar controls.",
+  json_copy: "Copy the current configuration JSON to the clipboard.",
+  json_apply: "Validate and apply the edited JSON to the selected K2 Region Studio node.",
+};
 
 const blankConfig = () => ({
   version: 1,
@@ -161,7 +216,7 @@ class RegionStudio {
       ["Tuning", () => this.tuningPage()],
       ["JSON", () => this.jsonPage()],
     ]) {
-      const button = h("button", {}, name);
+      const button = h("button", { title: HELP[`tab.${name}`] }, name);
       button.onclick = () => {
         this.activePane = name;
         tabs.querySelectorAll("button").forEach((item) => item.classList.remove("active"));
@@ -178,20 +233,20 @@ class RegionStudio {
   regionsPage() {
     const page = h("section", { class: "k2-page" });
     page.append(
-      h("label", {}, "Global prompt", h("textarea", {
+      h("label", { title: HELP.global_prompt }, "Global prompt", h("textarea", {
         value: this.config.global_prompt,
         onInput: (event) => { this.config.global_prompt = event.target.value; this.commit(); },
       })),
-      h("label", {}, "Global negative", h("textarea", {
+      h("label", { title: HELP.global_negative }, "Global negative", h("textarea", {
         value: this.config.global_negative,
         onInput: (event) => { this.config.global_negative = event.target.value; this.commit(); },
       })),
       h("div", { class: "k2-canvas-toolbar" },
         h("span", {}, `${this.width()} × ${this.height()}`),
-        h("button", { onClick: () => this.addRegion() }, "+ Region"),
+        h("button", { onClick: () => this.addRegion(), title: HELP.add_region }, "+ Region"),
       ),
-      this.canvasWrap = h("div", { class: "k2-canvas-wrap" },
-        this.canvas = h("canvas", { class: "k2-canvas" }),
+      this.canvasWrap = h("div", { class: "k2-canvas-wrap", title: HELP.canvas },
+        this.canvas = h("canvas", { class: "k2-canvas", title: HELP.canvas }),
       ),
       this.regionCards = h("div", { class: "k2-region-cards" }),
     );
@@ -218,7 +273,7 @@ class RegionStudio {
     this.regionCards.replaceChildren();
     this.config.regions.forEach((region, index) => {
       const card = h("article", { class: `k2-region-card ${index === this.selected ? "selected" : ""}` });
-      const field = (label, key, type = "text") => h("label", {}, label, h("input", {
+      const field = (label, key, type = "text", help = HELP[key]) => h("label", { title: help }, label, h("input", {
         type, value: region[key] ?? "",
         onInput: (event) => { region[key] = type === "number" ? Number(event.target.value) : event.target.value; this.commit(); },
       }));
@@ -228,14 +283,15 @@ class RegionStudio {
           h("strong", {}, region.name || `Region ${index + 1}`),
           h("button", { title: "Move forward", onClick: (event) => { event.stopPropagation(); if (index) { [this.config.regions[index - 1], this.config.regions[index]] = [this.config.regions[index], this.config.regions[index - 1]]; this.selected = index - 1; this.commit(); this.render(); } } }, "↑"),
           h("button", { title: "Move backward", onClick: (event) => { event.stopPropagation(); if (index < this.config.regions.length - 1) { [this.config.regions[index + 1], this.config.regions[index]] = [this.config.regions[index], this.config.regions[index + 1]]; this.selected = index + 1; this.commit(); this.render(); } } }, "↓"),
-          h("button", { onClick: (event) => { event.stopPropagation(); this.config.regions.splice(index, 1); this.commit(); this.render(); } }, "×"),
+          h("button", { title: "Delete this region.", onClick: (event) => { event.stopPropagation(); this.config.regions.splice(index, 1); this.commit(); this.render(); } }, "×"),
         ),
-        field("Name", "name"),
-        h("label", {}, "Prompt", h("textarea", { value: region.prompt || "", onInput: (e) => { region.prompt = e.target.value; this.commit(); } })),
-        h("label", {}, "Identity prompt", h("textarea", { value: region.face_identity_prompt || "", onInput: (e) => { region.face_identity_prompt = e.target.value; this.commit(); } })),
-        h("label", {}, "Negative", h("textarea", { value: region.negative_prompt || "", onInput: (e) => { region.negative_prompt = e.target.value; this.commit(); } })),
-        h("div", { class: "k2-grid" }, field("Priority", "priority", "number"),
-          h("label", {}, "Role", h("select", { onChange: (e) => { region.spatial_role = e.target.value; this.commit(); } },
+        field("Name", "name", "text", HELP.region_name),
+        h("label", { title: HELP.region_enabled }, h("input", { type: "checkbox", checked: region.enabled !== false, onChange: (e) => { region.enabled = e.target.checked; this.commit(); } }), " Enabled"),
+        h("label", { title: HELP.region_prompt }, "Prompt", h("textarea", { value: region.prompt || "", onInput: (e) => { region.prompt = e.target.value; this.commit(); } })),
+        h("label", { title: HELP.identity_prompt }, "Identity prompt", h("textarea", { value: region.face_identity_prompt || "", onInput: (e) => { region.face_identity_prompt = e.target.value; this.commit(); } })),
+        h("label", { title: HELP.region_negative }, "Negative", h("textarea", { value: region.negative_prompt || "", onInput: (e) => { region.negative_prompt = e.target.value; this.commit(); } })),
+        h("div", { class: "k2-grid" }, field("Priority", "priority", "number", HELP.priority),
+          h("label", { title: HELP.role }, "Role", h("select", { onChange: (e) => { region.spatial_role = e.target.value; this.commit(); } },
             ...["auto", "subject", "background"].map((value) => h("option", { value, selected: value === region.spatial_role }, value)))),
         ),
       );
@@ -297,22 +353,24 @@ class RegionStudio {
   lorasPage() {
     const page = h("section", { class: "k2-page" },
       h("p", { class: "k2-hint" }, "Choose any LoRA from ComfyUI’s models/loras folder. Global entries affect the full image; regional entries are token-delta gated to selected boxes."),
-      h("button", { onClick: () => { this.config.loras.push({ id: crypto.randomUUID(), name: this.loraNames[0] || "", strength: 1, global: true, region_ids: [], routing_mode: "standard", trigger_phrase: "" }); this.commit(); this.render(); } }, "+ LoRA"),
+      h("button", { title: HELP.lora_add, onClick: () => { this.config.loras.push({ id: crypto.randomUUID(), name: this.loraNames[0] || "", strength: 1, global: true, region_ids: [], routing_mode: "standard", trigger_phrase: "" }); this.commit(); this.render(); } }, "+ LoRA"),
     );
     this.config.loras.forEach((lora, index) => {
       const nameInput = this.loraNames.length
         ? h("select", { onChange: (e) => { lora.name = e.target.value; this.commit(); } }, ...this.loraNames.map((name) => h("option", { value: name, selected: name === lora.name }, name)))
         : h("input", { value: lora.name, onInput: (e) => { lora.name = e.target.value; this.commit(); } });
       page.append(h("article", { class: "k2-lora" },
-        h("div", { class: "k2-card-head" }, h("strong", {}, `LoRA ${index + 1}`), h("button", { onClick: () => { this.config.loras.splice(index, 1); this.commit(); this.render(); } }, "×")),
-        h("label", {}, "Model", nameInput),
-        h("label", {}, "Strength", h("input", { type: "number", min: -4, max: 4, step: .05, value: lora.strength, onInput: (e) => { lora.strength = Number(e.target.value); this.commit(); } })),
-        h("label", {}, h("input", { type: "checkbox", checked: lora.global, onChange: (e) => { lora.global = e.target.checked; this.commit(); this.render(); } }), " Global scope"),
-        !lora.global && h("fieldset", {}, h("legend", {}, "Regions"), ...this.config.regions.map((region) => h("label", {}, h("input", {
+        h("div", { class: "k2-card-head" }, h("strong", {}, `LoRA ${index + 1}`), h("button", { title: "Delete this LoRA assignment.", onClick: () => { this.config.loras.splice(index, 1); this.commit(); this.render(); } }, "×")),
+        h("label", { title: HELP.lora_model }, "Model", nameInput),
+        h("label", { title: HELP.lora_strength }, "Strength", h("input", { type: "number", min: -4, max: 4, step: .05, value: lora.strength, onInput: (e) => { lora.strength = Number(e.target.value); this.commit(); } })),
+        h("label", { title: HELP.lora_routing }, "Routing", h("select", { onChange: (e) => { lora.routing_mode = e.target.value; this.commit(); } },
+          ...["standard", "character_identity"].map((value) => h("option", { value, selected: value === (lora.routing_mode || "standard") }, value)))),
+        h("label", { title: HELP.lora_global }, h("input", { type: "checkbox", checked: lora.global, onChange: (e) => { lora.global = e.target.checked; this.commit(); this.render(); } }), " Global scope"),
+        !lora.global && h("fieldset", { title: HELP.lora_regions }, h("legend", {}, "Regions"), ...this.config.regions.map((region) => h("label", { title: `Apply this LoRA to ${region.name}.` }, h("input", {
           type: "checkbox", checked: (lora.region_ids || []).includes(region.id),
           onChange: (e) => { const ids = new Set(lora.region_ids || []); e.target.checked ? ids.add(region.id) : ids.delete(region.id); lora.region_ids = [...ids]; this.commit(); },
         }), region.name))),
-        h("label", {}, "Trigger phrase", h("input", { value: lora.trigger_phrase || "", onInput: (e) => { lora.trigger_phrase = e.target.value; this.commit(); } })),
+        h("label", { title: HELP.lora_trigger }, "Trigger phrase", h("input", { value: lora.trigger_phrase || "", onInput: (e) => { lora.trigger_phrase = e.target.value; this.commit(); } })),
       ));
     });
     return page;
@@ -321,17 +379,17 @@ class RegionStudio {
   emphasisPage() {
     const page = h("section", { class: "k2-page" },
       h("p", { class: "k2-hint" }, "Boost an exact phrase in the global prompt or one region. Phrase matching is resolved against the compiled Qwen token sequence."),
-      h("button", { onClick: () => { this.config.emphases.push({ scope_id: "__global__", phrase: "", strength: .5, occurrence: 0 }); this.render(); } }, "+ Emphasis"),
+      h("button", { title: HELP.emphasis_add, onClick: () => { this.config.emphases.push({ scope_id: "__global__", phrase: "", strength: .5, occurrence: 0 }); this.render(); } }, "+ Emphasis"),
     );
     this.config.emphases.forEach((emphasis, index) => page.append(
       h("article", { class: "k2-lora" },
-        h("div", { class: "k2-card-head" }, h("strong", {}, `Emphasis ${index + 1}`), h("button", { onClick: () => { this.config.emphases.splice(index, 1); this.commit(); this.render(); } }, "×")),
-        h("label", {}, "Scope", h("select", { onChange: (e) => { emphasis.scope_id = e.target.value; this.commit(); } },
+        h("div", { class: "k2-card-head" }, h("strong", {}, `Emphasis ${index + 1}`), h("button", { title: "Delete this emphasis rule.", onClick: () => { this.config.emphases.splice(index, 1); this.commit(); this.render(); } }, "×")),
+        h("label", { title: HELP.emphasis_scope }, "Scope", h("select", { onChange: (e) => { emphasis.scope_id = e.target.value; this.commit(); } },
           h("option", { value: "__global__", selected: emphasis.scope_id === "__global__" }, "Global prompt"),
           ...this.config.regions.map((region) => h("option", { value: region.id, selected: emphasis.scope_id === region.id }, region.name)))),
-        h("label", {}, "Exact phrase", h("input", { value: emphasis.phrase, onInput: (e) => { emphasis.phrase = e.target.value; } , onChange: () => this.commit() })),
-        h("label", {}, "Strength", h("input", { type: "number", min: 0, max: 2, step: .05, value: emphasis.strength, onInput: (e) => { emphasis.strength = Number(e.target.value); this.commit(); } })),
-        h("label", {}, "Occurrence (zero-based)", h("input", { type: "number", min: 0, step: 1, value: emphasis.occurrence || 0, onInput: (e) => { emphasis.occurrence = Number(e.target.value); this.commit(); } })),
+        h("label", { title: HELP.emphasis_phrase }, "Exact phrase", h("input", { value: emphasis.phrase, onInput: (e) => { emphasis.phrase = e.target.value; } , onChange: () => this.commit() })),
+        h("label", { title: HELP.emphasis_strength }, "Strength", h("input", { type: "number", min: 0, max: 2, step: .05, value: emphasis.strength, onInput: (e) => { emphasis.strength = Number(e.target.value); this.commit(); } })),
+        h("label", { title: HELP.emphasis_occurrence }, "Occurrence (zero-based)", h("input", { type: "number", min: 0, step: 1, value: emphasis.occurrence || 0, onInput: (e) => { emphasis.occurrence = Number(e.target.value); this.commit(); } })),
       )
     ));
     return page;
@@ -339,11 +397,11 @@ class RegionStudio {
 
   tuningPage() {
     const page = h("section", { class: "k2-page" });
-    const number = (section, key, label, min, max, step) => h("label", {}, label, h("input", {
+    const number = (section, key, label, min, max, step) => h("label", { title: HELP[`${section}.${key}`] }, label, h("input", {
       type: "number", min, max, step, value: this.config[section][key],
       onInput: (e) => { this.config[section][key] = Number(e.target.value); this.commit(); },
     }));
-    const check = (section, key, label) => h("label", {}, h("input", { type: "checkbox", checked: this.config[section][key], onChange: (e) => { this.config[section][key] = e.target.checked; this.commit(); } }), label);
+    const check = (section, key, label) => h("label", { title: HELP[`${section}.${key}`] }, h("input", { type: "checkbox", checked: this.config[section][key], onChange: (e) => { this.config[section][key] = e.target.checked; this.commit(); } }), label);
     page.append(
       h("h3", {}, "Spatial attention"), check("spatial", "enabled", " Enabled"),
       number("spatial", "strength", "Inside strength", 0, 8, .05),
@@ -353,8 +411,9 @@ class RegionStudio {
       check("spatial", "subject_competition", " Subject competition"),
       check("spatial", "subject_fill", " Fill unclaimed subject space"),
       check("spatial", "lora_delta_adaptation", " LoRA-delta adaptation"),
+      number("spatial", "lora_delta_adaptation_gain", "LoRA adaptation gain", 0, 1, .05),
       h("h3", {}, "Projector control"), check("projector", "enabled", " Enabled"),
-      h("label", {}, "Preset", h("select", { onChange: (e) => { this.config.projector.preset = e.target.value; this.commit(); } }, ...["filter_bypass2", "filter_bypass3", "skc3vo", "z0jglf", "custom"].map((value) => h("option", { value, selected: value === this.config.projector.preset }, value)))),
+      h("label", { title: HELP["projector.preset"] }, "Preset", h("select", { onChange: (e) => { this.config.projector.preset = e.target.value; this.commit(); } }, ...["filter_bypass2", "filter_bypass3", "skc3vo", "z0jglf", "custom"].map((value) => h("option", { value, selected: value === this.config.projector.preset }, value)))),
       number("projector", "multiplier", "Multiplier", -8, 8, .05),
       number("projector", "identity_protection", "Identity protection", 0, 1, .05),
       h("h3", {}, "Face detail"), check("face_detail", "enabled", " Enabled"),
@@ -362,19 +421,20 @@ class RegionStudio {
       number("face_detail", "crop_size", "Crop size", 256, 1024, 256), number("face_detail", "padding", "Padding", 1, 4, .1),
       number("face_detail", "feather", "Feather", 0, .5, .01), number("face_detail", "blend", "Blend", 0, 1, .01),
       number("face_detail", "lora_scale", "LoRA scale", 0, 4, .05),
+      number("face_detail", "detector_threshold", "Detector threshold", 0, 1, .01),
     );
     return page;
   }
 
   jsonPage() {
-    const area = h("textarea", { class: "k2-json", value: JSON.stringify(this.config, null, 2) });
+    const area = h("textarea", { class: "k2-json", title: HELP.json, value: JSON.stringify(this.config, null, 2) });
     const message = h("span", { class: "k2-json-message" });
     return h("section", { class: "k2-page" },
       h("p", { class: "k2-hint" }, "Lossless import/export and access to advanced emphasis vectors or future fields."),
       area,
       h("div", { class: "k2-json-actions" },
-        h("button", { onClick: () => navigator.clipboard.writeText(area.value) }, "Copy"),
-        h("button", { onClick: () => {
+        h("button", { title: HELP.json_copy, onClick: () => navigator.clipboard.writeText(area.value) }, "Copy"),
+        h("button", { title: HELP.json_apply, onClick: () => {
           try { this.config = { ...blankConfig(), ...JSON.parse(area.value) }; this.commit(); message.textContent = "Applied"; }
           catch (error) { message.textContent = error.message; }
         } }, "Apply JSON"), message,

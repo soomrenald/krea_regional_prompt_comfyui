@@ -31,18 +31,30 @@ class K2KreaLoader(io.ComfyNode):
                 io.Combo.Input(
                     "diffusion_model",
                     options=folder_paths.get_filename_list("diffusion_models"),
+                    tooltip="Krea 2 diffusion-model file from ComfyUI/models/diffusion_models.",
                 ),
                 io.Combo.Input(
                     "text_encoder",
                     options=folder_paths.get_filename_list("text_encoders"),
+                    tooltip="Krea-compatible Qwen text encoder from ComfyUI/models/text_encoders.",
                 ),
-                io.Combo.Input("vae", options=nodes.VAELoader.vae_list(nodes.VAELoader)),
+                io.Combo.Input(
+                    "vae",
+                    options=nodes.VAELoader.vae_list(nodes.VAELoader),
+                    tooltip="VAE used to encode and decode Krea latents.",
+                ),
                 io.Combo.Input(
                     "weight_dtype",
                     options=["default", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"],
                     default="default",
+                    tooltip="Model weight precision. Default follows the file/runtime; FP8 reduces memory when supported.",
                 ),
-                io.Combo.Input("text_encoder_device", options=["default", "cpu"]),
+                io.Combo.Input(
+                    "text_encoder_device",
+                    options=["default", "cpu"],
+                    default="default",
+                    tooltip="Keep default ComfyUI placement or force the Qwen text encoder to CPU to save VRAM.",
+                ),
             ],
             outputs=[io.Model.Output(), io.Clip.Output(), io.Vae.Output()],
         )
@@ -95,14 +107,43 @@ class K2RegionStudio(io.ComfyNode):
                 "regional LoRA routing, conditioning, latent, and masks."
             ),
             inputs=[
-                io.Model.Input("model"),
-                io.Clip.Input("clip"),
-                io.String.Input(
-                    "region_config", multiline=True, default=default_config_json()
+                io.Model.Input(
+                    "model",
+                    tooltip="Native Krea 2 MODEL from K2 Load Krea 2 or a compatible ComfyUI loader.",
                 ),
-                io.Int.Input("width", default=1024, min=256, max=16384, step=8),
-                io.Int.Input("height", default=1024, min=256, max=16384, step=8),
-                io.Int.Input("batch_size", default=1, min=1, max=64),
+                io.Clip.Input(
+                    "clip",
+                    tooltip="Krea/Qwen CLIP used to tokenize the compiled global and regional prompts.",
+                ),
+                io.String.Input(
+                    "region_config",
+                    multiline=True,
+                    default=default_config_json(),
+                    tooltip="Portable JSON written by the K2 Regions sidebar; normally edited through the sidebar rather than here.",
+                ),
+                io.Int.Input(
+                    "width",
+                    default=1024,
+                    min=256,
+                    max=16384,
+                    step=8,
+                    tooltip="Output canvas width in pixels; also defines the sidebar region coordinate system.",
+                ),
+                io.Int.Input(
+                    "height",
+                    default=1024,
+                    min=256,
+                    max=16384,
+                    step=8,
+                    tooltip="Output canvas height in pixels; also defines the sidebar region coordinate system.",
+                ),
+                io.Int.Input(
+                    "batch_size",
+                    default=1,
+                    min=1,
+                    max=64,
+                    tooltip="Number of latent images generated in one batch.",
+                ),
             ],
             outputs=[
                 io.Model.Output(display_name="patched_model"),
@@ -142,25 +183,63 @@ class K2RegionalSampler(io.ComfyNode):
                 "and optional LoRA-delta adaptation."
             ),
             inputs=[
-                io.Model.Input("model"),
-                io.Conditioning.Input("positive"),
-                io.Conditioning.Input("negative"),
-                io.Latent.Input("latent"),
-                io.Int.Input("seed", default=0, min=0, max=0xFFFFFFFFFFFFFFFF),
-                io.Int.Input("steps", default=20, min=1, max=10000),
-                io.Float.Input("cfg", default=1.0, min=0.0, max=100.0, step=0.1),
+                io.Model.Input("model", tooltip="Patched MODEL output from K2 Region Studio."),
+                io.Conditioning.Input(
+                    "positive", tooltip="Compiled positive conditioning from K2 Region Studio."
+                ),
+                io.Conditioning.Input(
+                    "negative", tooltip="Global negative conditioning from K2 Region Studio."
+                ),
+                io.Latent.Input(
+                    "latent", tooltip="Starting latent, normally the LATENT output from K2 Region Studio."
+                ),
+                io.Int.Input(
+                    "seed",
+                    default=0,
+                    min=0,
+                    max=0xFFFFFFFFFFFFFFFF,
+                    tooltip="Random-noise seed. The same seed and settings reproduce the same starting noise.",
+                ),
+                io.Int.Input(
+                    "steps",
+                    default=20,
+                    min=1,
+                    max=10000,
+                    tooltip="Number of denoising iterations. Krea Turbo commonly uses a small step count.",
+                ),
+                io.Float.Input(
+                    "cfg",
+                    default=1.0,
+                    min=0.0,
+                    max=100.0,
+                    step=0.1,
+                    tooltip="Classifier-free guidance scale. Krea Turbo is designed around CFG 1.0.",
+                ),
                 io.Combo.Input(
                     "sampler_name",
                     options=comfy.samplers.KSampler.SAMPLERS,
                     default="euler",
+                    tooltip="Denoising algorithm; Euler is the recommended default for the Krea Turbo workflow.",
                 ),
                 io.Combo.Input(
                     "scheduler",
                     options=comfy.samplers.KSampler.SCHEDULERS,
                     default="simple",
+                    tooltip="Sigma/noise schedule; Simple is the recommended Krea Turbo default.",
                 ),
-                io.Float.Input("denoise", default=1.0, min=0.0, max=1.0, step=0.01),
-                K2Plan.Input("region_plan", optional=True),
+                io.Float.Input(
+                    "denoise",
+                    default=1.0,
+                    min=0.0,
+                    max=1.0,
+                    step=0.01,
+                    tooltip="Fraction of the schedule to run. Use 1.0 for text-to-image; lower values preserve an input latent.",
+                ),
+                K2Plan.Input(
+                    "region_plan",
+                    optional=True,
+                    tooltip="Optional runtime plan that updates late-step relaxation and LoRA-delta adaptation during sampling.",
+                ),
             ],
             outputs=[io.Latent.Output(), io.String.Output(display_name="report")],
         )
@@ -216,12 +295,38 @@ class K2FaceDetail(io.ComfyNode):
             category=f"{CATEGORY}/postprocessing",
             description="Detects faces, matches them to regions, and refines each with its routed character LoRAs.",
             inputs=[
-                io.Image.Input("image"), io.Model.Input("model"), io.Clip.Input("clip"),
-                io.Vae.Input("vae"), K2Plan.Input("region_plan"),
-                io.Int.Input("seed", default=0, min=0, max=0xFFFFFFFFFFFFFFFF),
-                io.Combo.Input("sampler_name", options=comfy.samplers.KSampler.SAMPLERS),
-                io.Combo.Input("scheduler", options=comfy.samplers.KSampler.SCHEDULERS),
-                io.String.Input("detector_path", default=""),
+                io.Image.Input("image", tooltip="Decoded image whose detected faces will be refined."),
+                io.Model.Input("model", tooltip="Base Krea MODEL used for each face crop pass."),
+                io.Clip.Input("clip", tooltip="Krea/Qwen CLIP used to encode each assigned face prompt."),
+                io.Vae.Input("vae", tooltip="VAE used to encode face crops and decode their refined latents."),
+                K2Plan.Input(
+                    "region_plan",
+                    tooltip="Runtime plan from K2 Region Studio containing region, LoRA, prompt, and face-detail settings.",
+                ),
+                io.Int.Input(
+                    "seed",
+                    default=0,
+                    min=0,
+                    max=0xFFFFFFFFFFFFFFFF,
+                    tooltip="Base face-refinement seed; each detected face receives a deterministic offset.",
+                ),
+                io.Combo.Input(
+                    "sampler_name",
+                    options=comfy.samplers.KSampler.SAMPLERS,
+                    default="euler",
+                    tooltip="Sampler used for every face crop refinement pass.",
+                ),
+                io.Combo.Input(
+                    "scheduler",
+                    options=comfy.samplers.KSampler.SCHEDULERS,
+                    default="simple",
+                    tooltip="Noise schedule used for every face crop refinement pass.",
+                ),
+                io.String.Input(
+                    "detector_path",
+                    default="",
+                    tooltip="Optional path to face_det.onnx. Leave blank to auto-discover FantasyPortrait's detector.",
+                ),
             ],
             outputs=[io.Image.Output(), io.String.Output(display_name="report")],
         )
@@ -243,10 +348,26 @@ class K2PostUpscale(io.ComfyNode):
             display_name="K2 Post Upscale",
             category=f"{CATEGORY}/postprocessing",
             inputs=[
-                io.Image.Input("image"),
-                io.Float.Input("scale", default=2.0, min=1.0, max=8.0, step=0.25),
-                io.Combo.Input("method", options=["lanczos", "upscale_model"]),
-                io.UpscaleModel.Input("upscale_model", optional=True),
+                io.Image.Input("image", tooltip="Image to resize or neural-upscale."),
+                io.Float.Input(
+                    "scale",
+                    default=2.0,
+                    min=1.0,
+                    max=8.0,
+                    step=0.25,
+                    tooltip="Final width and height multiplier relative to the input image.",
+                ),
+                io.Combo.Input(
+                    "method",
+                    options=["lanczos", "upscale_model"],
+                    default="lanczos",
+                    tooltip="Lanczos performs exact resizing; upscale_model first runs the connected neural model, then resizes to the requested scale.",
+                ),
+                io.UpscaleModel.Input(
+                    "upscale_model",
+                    optional=True,
+                    tooltip="Optional native UPSCALE_MODEL; required only when method is upscale_model.",
+                ),
             ],
             outputs=[io.Image.Output()],
         )

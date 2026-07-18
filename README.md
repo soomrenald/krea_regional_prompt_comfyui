@@ -112,6 +112,231 @@ You can supply another path in the `detector_path` widget. The pass detects face
 
 The bare workflow is intentionally composable with native loaders, text encoders, detectors, samplers, VAE nodes, preview/save nodes, and third-party nodes that use standard ComfyUI types. The sidebar-driven `K2 Region Studio` is the app version: it provides the drawable labeled-region canvas and the same prompts, prompt emphases, regional LoRA assignments, spatial controls, projector controls, face-detail settings, and JSON import/export stored inside the workflow.
 
+## Complete control reference
+
+ComfyUI shows a short version of these descriptions when you hover over a node input. The K2 Regions sidebar also shows hover notes on its tabs, labels, canvas, and buttons.
+
+### K2 Load Krea 2
+
+| Control | Default | Description |
+| --- | --- | --- |
+| `diffusion_model` | First available file | Krea 2 diffusion model from `models/diffusion_models`. The loader does not download a model. |
+| `text_encoder` | First available file | Krea-compatible Qwen encoder from `models/text_encoders`. A generic non-Krea encoder will not produce the expected conditioning layout. |
+| `vae` | First available VAE | VAE used for latent encoding and image decoding. |
+| `weight_dtype` | `default` | `default` follows the model file and ComfyUI runtime. FP8 modes reduce model memory when the installed device and Torch build support them; `fp8_e4m3fn_fast` also enables ComfyUI FP8 optimizations. |
+| `text_encoder_device` | `default` | `default` lets ComfyUI place/offload Qwen. `cpu` keeps its load and offload devices on CPU, saving VRAM at the cost of slower prompt encoding. |
+
+Native `UNETLoader`, `CLIPLoader` with type `krea2`, and `VAELoader` may replace this convenience node.
+
+### K2 Region Studio graph node
+
+| Control | Default | Description |
+| --- | --- | --- |
+| `model` | Connected input | Native Krea 2 `MODEL`. The node clones and patches it; the incoming branch is not mutated. |
+| `clip` | Connected input | Krea/Qwen `CLIP` used to tokenize the compiled prompt and produce positive and negative conditioning. |
+| `region_config` | Empty Studio project | Portable JSON written by the sidebar and embedded in workflow metadata. The frontend hides this widget because the sidebar and JSON pane are safer editors. |
+| `width` | `1024` | Output width and horizontal coordinate system for all pixel-space region boxes. Values are aligned by the backend as required. |
+| `height` | `1024` | Output height and vertical coordinate system for all pixel-space region boxes. |
+| `batch_size` | `1` | Number of empty latent samples created together. Region and LoRA routing is broadcast across the batch. |
+
+The outputs are the patched model, original clip, compiled positive/negative conditioning, empty latent, normal union `MASK`, runtime `K2_REGION_PLAN`, compiled prompt text, and a JSON report.
+
+### Sidebar: Regions
+
+| Control | Description |
+| --- | --- |
+| `Global prompt` | Scene-wide positive description. Enabled regional clauses and spatial relationship instructions are compiled after it. |
+| `Global negative` | Scene-wide negative text used for the main conditioning and face-detail passes. Region-local negatives are stored but Krea Turbo currently has no separate regional negative branch. |
+| `+ Region` | Adds a labeled box with a unique internal ID and a descending default priority (`100`, `99`, and so on). |
+| Drawing canvas | Drag inside a box to move it. Drag the square at its lower-right corner to resize it. Coordinates are clamped to the node width and height. |
+| Up/down arrows | Change sidebar/list order. Equal-priority regions retain this order during compilation; explicit priorities otherwise determine compiled order. |
+| `Name` | Human-readable label used in generated spatial instructions, relationship text, face assignments, and reports. Names do not replace stable internal region IDs. |
+| `Enabled` | Includes or excludes the region from prompt compilation, spatial attention, and face assignment without deleting it. Remove the region from non-global LoRA assignments before disabling it; dangling regional assignments are rejected. |
+| `Prompt` | Description assigned to the box. Empty regional prompts are excluded from the active regional plan. |
+| `Identity prompt` | Face-specific description appended to the regional clause, protected by projector identity protection, and preferred by Face Detail. |
+| `Negative` | Region-local negative text retained in workflow JSON for compatibility and future regional-negative paths. It is not a separate Krea Turbo conditioning branch today. |
+| `Priority` | Higher numbers compile first. Higher-priority regions also get the first chance to claim an ambiguous detected face. Priority does not increase prompt/LoRA strength and is not an image-compositing z-index. Equal values preserve list order. |
+| `Role` | `subject` enables subject competition/fill and a full outside penalty. `background` uses a softer outside penalty. `auto` treats boxes covering at least 70% of canvas width as background and smaller boxes as subjects. |
+
+### Sidebar: LoRAs
+
+| Control | Default | Description |
+| --- | --- | --- |
+| `+ LoRA` | — | Adds an assignment using ComfyUI's current `models/loras` inventory. |
+| `Model` | First available LoRA | LoRA file to validate against and apply to the active Krea model. Incompatible namespaces are reported instead of silently doing nothing. |
+| `Strength` | `1.0` | Model-delta multiplier from `-4` to `4`. Zero disables the assignment; negative values invert its learned delta. |
+| `Routing` | `standard` | `standard` uses normal global/regional routing. `character_identity` requires Global scope off, at least one selected region, and a trigger phrase; it adds identity anchors while retaining the full regional text and image gates. |
+| `Global scope` | Enabled | Applies the LoRA to all text and image lanes. Disable it to expose the region checklist and use strict regional routing. |
+| `Regions` | None | Union of named regions receiving a non-global LoRA. Its text deltas are limited to those compiled prompt spans and its image deltas are strictly zero outside their pixel boxes. |
+| `Trigger phrase` | Empty | Character activation phrase used by `character_identity` routing. It must be non-empty in that mode and should match the phrase learned during LoRA training. |
+
+### Sidebar: Emphasis
+
+| Control | Default | Description |
+| --- | --- | --- |
+| `Scope` | Global prompt | Limits exact-phrase matching to the global prompt or one enabled region's prompt. |
+| `Exact phrase` | Empty | Case-sensitive text to locate in the selected scope. Compilation fails with a useful error if the phrase is absent. |
+| `Strength` | `0.5` | Additional text-to-image spatial attention bias from `0` to `2`. It does not rewrite Qwen token weights or LoRA strength. |
+| `Occurrence` | `0` | Zero-based matching index when the phrase occurs more than once: `0` is first, `1` second, `2` third, and so forth. |
+
+### Sidebar: Spatial attention tuning
+
+| Control | Default | Description |
+| --- | --- | --- |
+| `Enabled` | On | Installs the Krea spatial-attention override. With it off, prompts and LoRAs still compile, but regional attention and emphasis bias are not applied. |
+| `Inside strength` | `1.0` | Positive attention-logit bias inside each region. Larger values bind regional text more strongly to its image-token field. |
+| `Outside penalty` | `1.0` | Negative attention-logit bias outside subject regions. Background regions use one quarter of this penalty. Larger values reduce prompt leakage but can make transitions rigid. |
+| `Edge falloff (px)` | `128` | Distance beyond a box over which its soft attention field fades. Zero produces a hard attention edge. Regional LoRA image gates remain strict boxes regardless of falloff. |
+| `Late-step scale` | `0.35` | Fraction of spatial strength retained at the final denoising step. Relaxation begins after 55% progress and interpolates toward this value. Requires `region_plan` on K2 Regional Sampler. |
+| `Subject competition` | On | In overlaps between two or more subject regions, assigns soft ownership proportional to squared regional field strength so all subjects do not fully claim the same token. |
+| `Fill unclaimed subject space` | On | Keeps a stronger field toward subject-box edges, reducing weak/unclaimed space inside a subject box. |
+| `LoRA-delta adaptation` | Off | Uses observed regional LoRA-delta energy to adjust each region's spatial scale during sampling. Requires K2 Regional Sampler progress updates. |
+| `LoRA adaptation gain` | `0.35` | Maximum correction gain used by LoRA-delta adaptation. Zero effectively disables the correction while leaving measurement enabled; larger values rebalance more aggressively. |
+
+### Sidebar: Projector control
+
+| Control | Default | Description |
+| --- | --- | --- |
+| `Enabled` | Off | Applies a delta to Krea's 12-value `txtfusion.projector.weight`. No base checkpoint weights are overwritten. |
+| `Preset` | `filter_bypass2` | Selects a built-in projector vector. `custom` reads the 12 numbers in `projector.values`, edited in the JSON pane. |
+| `Multiplier` | `1.0` | Signed scale applied to all preset values. Zero produces no projector effect; negative values reverse the vector. |
+| `Identity protection` | `1.0` | Reduces projector changes on face-identity token spans. `0` applies the projector normally; `1` completely preserves the baseline projector behavior for those tokens. |
+
+### Sidebar: Face detail tuning
+
+These settings are stored in the region plan and used by the separate `K2 Regional Face Detail` node.
+
+| Control | Default | Description |
+| --- | --- | --- |
+| `Enabled` | Off | Enables detector-driven face refinement. If off, the Face Detail node passes the image through unchanged. |
+| `Steps` | `8` | Denoising iterations for each face crop. |
+| `Denoise` | `0.15` | Crop denoise fraction. Low values preserve facial structure; higher values permit larger changes. |
+| `Crop size` | `512` | Square working resolution used to encode, sample, and decode every face crop. |
+| `Padding` | `2.0` | Multiplier expanding the detected face before constructing a square crop. More padding includes hair and surrounding context. |
+| `Feather` | `0.12` | Fractional border width used to soften the crop mask during compositing. |
+| `Blend` | `0.5` | Opacity of the refined crop over the source: `0` keeps the original and `1` uses the full refinement. |
+| `LoRA scale` | `0.5` | Additional multiplier applied to each region-assigned LoRA during its face crop pass. |
+| `Detector threshold` | `0.4` | Minimum NanoDet confidence from `0` to `1`. Higher values reject uncertain detections. |
+
+### Sidebar: JSON
+
+`Copy` places the complete portable configuration on the clipboard. `Apply JSON` parses and stores edited JSON in the selected Studio node. This pane also exposes advanced fields: the 12-number `projector.values` vector and future versioned fields. Invalid JSON or a configuration version newer than the package is rejected rather than partially applied.
+
+### K2 Regional Sampler
+
+| Control | Default | Description |
+| --- | --- | --- |
+| `model` | Connected input | Patched `MODEL` from K2 Region Studio. |
+| `positive` / `negative` | Connected inputs | Compiled positive and global negative conditioning from Studio. |
+| `latent` | Connected input | Starting latent. Studio supplies an empty latent, but any compatible native latent may be used. |
+| `seed` | `0` | Random-noise seed. The same seed and settings reproduce the same starting noise. |
+| `steps` | `20` | Denoising iterations. Krea Turbo commonly uses a much smaller count, such as the starter workflow's `8`. |
+| `cfg` | `1.0` | Classifier-free guidance. Krea Turbo is designed around `1.0`; increasing CFG is not automatically an improvement. |
+| `sampler_name` | `euler` | ComfyUI sampling algorithm. Euler is the package default for Krea Turbo. |
+| `scheduler` | `simple` | ComfyUI sigma schedule. Simple is the package default for Krea Turbo. |
+| `denoise` | `1.0` | Fraction of the schedule used. `1.0` is normal text-to-image; lower values preserve more of a supplied latent. |
+| `region_plan` | Optional | Enables per-step late relaxation and LoRA-delta adaptation updates and produces a final regional report. Without it, the node behaves like a normal compatible sampler. |
+
+### K2 Regional Face Detail
+
+| Control | Description |
+| --- | --- |
+| `image` | Decoded image batch to inspect and refine. |
+| `model`, `clip`, `vae` | Native Krea components used to sample each detected crop. |
+| `region_plan` | Studio runtime plan containing regions, priorities, LoRA assignments, prompts, and the face-detail tuning above. |
+| `seed` | Base seed. Batch and face indices receive deterministic offsets so separate faces do not share identical noise. |
+| `sampler_name` / `scheduler` | Sampler and noise schedule for every crop pass; defaults are `euler` and `simple`. |
+| `detector_path` | Optional path to a compatible NanoDet `face_det.onnx`. Blank enables the documented FantasyPortrait auto-discovery path. |
+
+Only non-background regions with an active prompt, assigned non-global LoRA, and a nearby detected face become refinement targets. Higher-priority regions claim ambiguous detections first.
+
+### K2 Post Upscale
+
+| Control | Default | Description |
+| --- | --- | --- |
+| `image` | Connected input | Image batch to enlarge. |
+| `scale` | `2.0` | Final width and height multiplier, from `1` to `8`. |
+| `method` | `lanczos` | `lanczos` performs a deterministic high-quality resize. `upscale_model` first runs the connected neural model and then resizes to the exact requested dimensions. |
+| `upscale_model` | Optional | Native ComfyUI `UPSCALE_MODEL`; required only for `upscale_model` mode. Use ComfyUI's Load Upscale Model node as its source. |
+
+### Bare: K2 BBox To Regional Mask
+
+| Control | Default | Description |
+| --- | --- | --- |
+| `width` / `height` | `1024` | Image dimensions used when no latent is connected. A connected latent overrides both using the Krea VAE scale. |
+| `bbox_format` | `xywh` | `xywh` means x/y/width/height. `xyxy` means left/top/right/bottom. Normalized `0..1` coordinates are also accepted. |
+| `bbox_index` | `0` | Zero-based box selected from a detector result. Out-of-range indices clamp to the available list. |
+| `grow_px` | `0` | Expands every side by this many pixels; negative values shrink the box. |
+| `feather_px` | `32` | Softens the pixel mask inward from its edge before latent and token masks are derived. |
+| `snap_to_krea_token_grid` | On | Expands box edges to Krea's 16-pixel image-token grid. |
+| `batch_mode` | `repeat` | `single` keeps a one-mask object, `repeat` broadcasts that mask to consumers, and `per_batch` creates masks matching latent batch size. |
+| `bboxes` | Optional | Standard `BOUNDING_BOX` input. It takes precedence over `kj_bboxes`. |
+| `kj_bboxes` | Optional | KJNodes-style `BBOX` fallback input. |
+| `latent` | Optional | Supplies dimensions and batch size. |
+
+### Bare: K2 Regional Character LoRA
+
+| Control | Default | Description |
+| --- | --- | --- |
+| `region` | Connected input | Reusable region/mask object from the BBox node. |
+| `positive` / `negative` | Connected inputs | Conditionings used by this LoRA's regional prediction branch. |
+| `lora_name` | First available LoRA | LoRA file bound to this region. |
+| `lora_strength` | `1.0` | Strength used when loading the branch. Negative values invert it. |
+| `delta_strength` | `1.0` | Additional multiplier on `(LoRA prediction - base prediction)` before masking and overlap resolution. |
+| `start_percent` / `end_percent` | `0.10` / `0.95` | Inclusive active interval in adapter-mode denoising progress. |
+| `enabled` | On | Keeps the binding in the graph while allowing it to be bypassed. |
+| `attention_only_filter` | On | In strict-adapter mode, removes non-Krea-attention LoRA keys. |
+| `ignore_text_encoder_lora` | On | Removes CLIP/Qwen LoRA keys so the regional branch patches only the diffusion model. |
+
+### Bare: K2 Regional LoRA Stack 3
+
+| Control | Description |
+| --- | --- |
+| `regional_lora_1..3` | One required and two optional region-bound LoRAs. Their socket order is used by priority overlap modes. |
+| `overlap_mode=normalize` | Averages active masked deltas in overlaps. |
+| `overlap_mode=priority_1` | First connected LoRA claims overlapping locations before later inputs. |
+| `overlap_mode=priority_3` | Reverses socket order, so the third/last connected LoRA claims overlaps first. |
+| `overlap_mode=add_clamped` | Sums all masked deltas and clamps the combined delta to `[-1, 1]`. |
+
+### Bare: K2 Regional Layer LoRA Apply
+
+| Control | Default | Description |
+| --- | --- | --- |
+| `model` | Connected input | Base Krea model cloned for regional layer hooks. |
+| `regional_lora_stack` | Connected input | LoRAs and masks to inject. |
+| `layer_injection_targets` | `attn_out_mlp` | `attn_out_mlp` targets attention output and MLP writeback layers; `attention_only` targets Krea attention projections; `all_matched_linears` uses every compatible matched linear. Wider policies can increase effect and compatibility risk. |
+| `outside_strength` | `0` | Fraction of a regional LoRA allowed outside its image mask. Zero is strict; one makes image-lane application global. |
+| `text_token_strength` | `0` | Mask strength on text-token lanes in mixed text/image sequences. |
+| `debug_logging` | Off | Adds verbose matching and skipped-layer information to the report/server log. |
+
+### Bare: K2 Regional Attention LoRA Sampler
+
+The standard `model`, conditioning, latent, seed, steps, CFG, sampler, scheduler, and denoise controls behave like ComfyUI sampling controls. Bare CFG defaults to `4.0`; sampler and scheduler default to `euler` and `simple`.
+
+| Control | Default | Description |
+| --- | --- | --- |
+| `regional_lora_stack` | Connected input | Regional branches, masks, schedules, and overlap policy. |
+| `execution_mode` | `auto` | `auto` uses `k2_regional_velocity_predictor` when the model exposes it and otherwise uses layer injection. `strict_adapter` returns base samples rather than falling back. `layer_injection` always uses cloned layer hooks. |
+| `layer_injection_targets` | `attn_out_mlp` | Target policy used only by layer-injection execution. |
+| `layer_outside_strength` | `0` | LoRA fraction permitted outside region masks in layer-injection mode. |
+| `layer_text_token_strength` | `0` | LoRA mask strength on text tokens in layer-injection mode. |
+| `pin_outside_regions` | On | Adapter mode restores the exact base trajectory outside the regional union after every denoising step. |
+| `final_latent_pin` | On | Layer-injection mode replaces the final latent outside the union with the base latent. |
+| `post_decode_safe_mode` | On | Workflow-compatibility flag. Pixel-safe isolation is performed by the separate Decode Composite node. |
+| `debug_return_base_latent` | On | Returns a copied base latent payload for debugging/compositing. The base output socket remains populated for compatibility. |
+
+Outputs are regional samples, base samples, the union mask, and a text debug report.
+
+### Bare: K2 Regional Decode Composite
+
+| Control | Default | Description |
+| --- | --- | --- |
+| `vae` | Connected input | Decodes both latent branches using the same VAE. |
+| `regional_samples` | Connected input | Regional latent from the bare sampler. |
+| `base_samples` | Connected input | Base latent from the same sampler. |
+| `union_mask` | Connected input | Pixel union identifying where regional decoding is allowed to replace base decoding. |
+| `feather_px` | `32` | Average-pool radius used to soften the pixel composite boundary. Zero produces a hard mask. |
+
 ## Compatibility notes
 
 - The spatial override occupies ComfyUI’s `optimized_attention_override` hook. Do not put another node that claims the same hook on the same model branch; branch before applying either override.
