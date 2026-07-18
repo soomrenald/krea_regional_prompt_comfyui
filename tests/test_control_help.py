@@ -29,6 +29,7 @@ def test_sidebar_controls_have_hover_help_and_complete_sections():
         "lora_routing",
         "emphasis_occurrence",
         '"spatial.lora_delta_adaptation_gain"',
+        '"spatial.strict_lora_isolation"',
         '"projector.identity_protection"',
         '"face_detail.detector_threshold"',
         "json_apply",

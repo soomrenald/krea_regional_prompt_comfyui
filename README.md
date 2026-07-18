@@ -192,6 +192,7 @@ The outputs are the patched model, original clip, compiled positive/negative con
 | `Fill unclaimed subject space` | On | Keeps a stronger field toward subject-box edges, reducing weak/unclaimed space inside a subject box. |
 | `LoRA-delta adaptation` | Off | Uses observed regional LoRA-delta energy to adjust each region's spatial scale during sampling. Requires K2 Regional Sampler progress updates. |
 | `LoRA adaptation gain` | `0.35` | Maximum correction gain used by LoRA-delta adaptation. Zero effectively disables the correction while leaving measurement enabled; larger values rebalance more aggressively. |
+| `Strict regional LoRA isolation` | On | When at least one non-global LoRA is active, prepares a matched model containing the same projector, spatial prompting, and global LoRAs but no regional LoRAs. K2 Regional Sampler runs one extra baseline pass with identical noise and restores that baseline outside the assigned LoRA boxes. This prevents single-stream attention from carrying a regional LoRA's effect to another subject, at the cost of roughly one additional sampling pass. |
 
 ### Sidebar: Projector control
 
@@ -235,7 +236,9 @@ These settings are stored in the region plan and used by the separate `K2 Region
 | `sampler_name` | `euler` | ComfyUI sampling algorithm. Euler is the package default for Krea Turbo. |
 | `scheduler` | `simple` | ComfyUI sigma schedule. Simple is the package default for Krea Turbo. |
 | `denoise` | `1.0` | Fraction of the schedule used. `1.0` is normal text-to-image; lower values preserve more of a supplied latent. |
-| `region_plan` | Optional | Enables per-step late relaxation and LoRA-delta adaptation updates and produces a final regional report. Without it, the node behaves like a normal compatible sampler. |
+| `region_plan` | Optional | Enables per-step late relaxation, LoRA-delta adaptation, strict regional-LoRA baseline isolation, and a final report. The sampler can recover the plan from the patched model attachment, but an explicit connection is recommended. |
+
+Krea's transformer mixes text and image tokens in one attention stream. Adapter-output masks alone cannot guarantee that an altered token will not influence unassigned tokens in later layers. With strict isolation enabled, the sampler therefore restores a matched no-regional-LoRA baseline outside the union of regions actually targeted by non-global LoRAs. Global LoRAs remain present in both passes. Use `K2 Regional Sampler`, rather than a native KSampler, when this guarantee is required.
 
 ### K2 Regional Face Detail
 
@@ -342,6 +345,7 @@ Outputs are regional samples, base samples, the union mask, and a text debug rep
 - The spatial override occupies ComfyUI’s `optimized_attention_override` hook. Do not put another node that claims the same hook on the same model branch; branch before applying either override.
 - Krea regional LoRAs are validated against the active Krea model namespace. A LoRA for another architecture is rejected instead of being silently applied to zero layers.
 - Global negative conditioning is output normally. Region-local negative text is preserved in workflow configuration, but the current Krea Turbo CFG-free path has no separate regional negative branch.
+- Strict regional LoRA isolation adds a matched baseline sampling pass only when a non-global LoRA is active. Disable it under Spatial attention tuning when faster approximate token gating is preferred over final-latent isolation.
 - Cancel, queue, history, workflow embedding, output naming, model unloading, previews, and resource monitoring are provided by ComfyUI.
 
 An editable starter graph is in [`workflows/k2_region_starter.json`](workflows/k2_region_starter.json). Select your locally installed model filenames after loading it.

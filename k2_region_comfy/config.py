@@ -36,6 +36,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "late_step_scale": 0.35,
         "lora_delta_adaptation": False,
         "lora_delta_adaptation_gain": 0.35,
+        "strict_lora_isolation": True,
     },
     "projector": {
         "enabled": False,

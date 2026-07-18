@@ -6,7 +6,12 @@ from typing_extensions import override
 
 from comfy_api.latest import ComfyExtension, io
 
-from .backend import RuntimeState, prepare_studio
+from .backend import (
+    ATTACHMENT_KEY,
+    RuntimeState,
+    pin_regional_latent_to_baseline,
+    prepare_studio,
+)
 from .config import default_config_json, parse_studio_config
 from .face_refine import refine_faces
 from .bare_nodes import BARE_NODE_CLASSES
@@ -180,7 +185,8 @@ class K2RegionalSampler(io.ComfyNode):
             category=f"{CATEGORY}/sampling",
             description=(
                 "KSampler-compatible sampler that also updates late-step relaxation "
-                "and optional LoRA-delta adaptation."
+                "and optional LoRA-delta adaptation, and pins a matched baseline "
+                "outside regional LoRA boxes when strict isolation is enabled."
             ),
             inputs=[
                 io.Model.Input("model", tooltip="Patched MODEL output from K2 Region Studio."),
@@ -238,7 +244,7 @@ class K2RegionalSampler(io.ComfyNode):
                 K2Plan.Input(
                     "region_plan",
                     optional=True,
-                    tooltip="Optional runtime plan that updates late-step relaxation and LoRA-delta adaptation during sampling.",
+                    tooltip="Runtime plan for relaxation, LoRA adaptation, and matched-baseline strict regional LoRA isolation.",
                 ),
             ],
             outputs=[io.Latent.Output(), io.String.Output(display_name="report")],
@@ -262,25 +268,88 @@ class K2RegionalSampler(io.ComfyNode):
         )
         noise = comfy.sample.prepare_noise(samples, seed, latent.get("batch_index"))
         preview = latent_preview.prepare_callback(model, steps)
+        runtime = region_plan if isinstance(region_plan, RuntimeState) else None
+        if runtime is None and hasattr(model, "get_attachment"):
+            attached = model.get_attachment(ATTACHMENT_KEY)
+            runtime = attached if isinstance(attached, RuntimeState) else None
 
         def callback(step, denoised, current, total):
-            if isinstance(region_plan, RuntimeState):
-                region_plan.update_step(step + 1, total)
+            if runtime is not None:
+                runtime.update_step(step + 1, total)
             preview(step, denoised, current, total)
 
+        baseline_result = None
+        if runtime is not None and runtime.strict_lora_isolation:
+            if runtime.baseline_model is None:
+                raise RuntimeError(
+                    "Strict regional LoRA isolation needs the matched baseline model "
+                    "prepared by K2 Region Studio"
+                )
+
+            def baseline_callback(step, denoised, current, total):
+                del denoised, current
+                runtime.update_baseline_step(step + 1, total)
+
+            baseline_result = comfy.sample.sample(
+                runtime.baseline_model,
+                noise.clone(),
+                steps,
+                cfg,
+                sampler_name,
+                scheduler,
+                positive,
+                negative,
+                samples.clone(),
+                denoise=denoise,
+                noise_mask=latent.get("noise_mask"),
+                callback=baseline_callback,
+                disable_pbar=not comfy.utils.PROGRESS_BAR_ENABLED,
+                seed=seed,
+            )
+
         result = comfy.sample.sample(
-            model, noise, steps, cfg, sampler_name, scheduler, positive, negative,
-            samples, denoise=denoise, noise_mask=latent.get("noise_mask"),
-            callback=callback, disable_pbar=not comfy.utils.PROGRESS_BAR_ENABLED, seed=seed,
+            model,
+            noise.clone() if baseline_result is not None else noise,
+            steps,
+            cfg,
+            sampler_name,
+            scheduler,
+            positive,
+            negative,
+            samples.clone() if baseline_result is not None else samples,
+            denoise=denoise,
+            noise_mask=latent.get("noise_mask"),
+            callback=callback,
+            disable_pbar=not comfy.utils.PROGRESS_BAR_ENABLED,
+            seed=seed,
         )
+        isolation_mask = None
+        if baseline_result is not None:
+            result, isolation_mask = pin_regional_latent_to_baseline(
+                result, baseline_result, runtime
+            )
         output = latent.copy()
         output.pop("downscale_ratio_spacial", None)
         output.pop("downscale_ratio_temporal", None)
         output["samples"] = result
         report = (
-            region_plan.final_report() if isinstance(region_plan, RuntimeState)
+            runtime.final_report() if runtime is not None
             else {"status": "sampled", "regional_progress_updates": False}
         )
+        if isolation_mask is not None:
+            outside = isolation_mask <= 0
+            outside_difference = (result - baseline_result).abs()[outside.expand_as(result)]
+            report["strict_lora_isolation"].update(
+                {
+                    "strategy": "matched_baseline_final_latent_pin",
+                    "latent_mask_coverage": float(isolation_mask.float().mean().item()),
+                    "outside_latent_difference_max": (
+                        float(outside_difference.max().item())
+                        if outside_difference.numel()
+                        else 0.0
+                    ),
+                }
+            )
         return io.NodeOutput(output, json.dumps(report, indent=2, default=str))
 
 

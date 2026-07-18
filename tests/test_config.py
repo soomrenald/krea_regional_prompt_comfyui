@@ -14,6 +14,14 @@ def test_default_configuration_compiles_without_regions():
     assert config.height == 768
     assert config.regions == ()
     assert config.spatial["enabled"] is True
+    assert config.spatial["strict_lora_isolation"] is True
+
+
+def test_older_configuration_inherits_strict_lora_isolation_default():
+    payload = json.loads(default_config_json())
+    payload["spatial"].pop("strict_lora_isolation")
+    config = parse_studio_config(json.dumps(payload), 512, 512)
+    assert config.spatial["strict_lora_isolation"] is True
 
 
 def test_region_configuration_compiles_pixel_box_and_prompt():

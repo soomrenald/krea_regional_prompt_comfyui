@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from math import ceil
 from pathlib import Path
 from typing import Any
 
@@ -148,6 +149,18 @@ class RuntimeState:
     lora_reports: list[dict[str, Any]]
     projector_report: dict[str, Any]
     report: dict[str, Any]
+    baseline_model: Any = None
+    baseline_runtime: RuntimeState | None = None
+
+    @property
+    def regional_lora_routes(self) -> tuple[LoraDeltaRoute, ...]:
+        return tuple(route for route in self.lora_statistics.routes if not route.global_scope)
+
+    @property
+    def strict_lora_isolation(self) -> bool:
+        return bool(self.config.spatial.get("strict_lora_isolation", True)) and bool(
+            self.regional_lora_routes
+        )
 
     def update_step(self, completed: int, total: int) -> None:
         if self.attention_override is None:
@@ -162,13 +175,65 @@ class RuntimeState:
             )
             self.lora_statistics.reset_step_measurements()
 
+    def update_baseline_step(self, completed: int, total: int) -> None:
+        if self.baseline_runtime is not None:
+            self.baseline_runtime.update_step(completed, total)
+
     def final_report(self) -> dict[str, Any]:
         result = dict(self.report)
         result["attention_calls"] = (
             self.attention_override.matched_calls if self.attention_override else 0
         )
         result["lora_delta_statistics"] = self.lora_statistics.summary()
+        result["strict_lora_isolation"] = {
+            "enabled": self.strict_lora_isolation,
+            "baseline_available": self.baseline_model is not None,
+            "regional_route_count": len(self.regional_lora_routes),
+        }
         return result
+
+
+def regional_lora_latent_mask(runtime: RuntimeState, reference):
+    """Build the union of region-assigned LoRA boxes at latent resolution."""
+    import torch
+    import torch.nn.functional as functional
+
+    routes = runtime.regional_lora_routes
+    if not routes:
+        return torch.zeros(
+            (int(reference.shape[0]), 1, int(reference.shape[-2]), int(reference.shape[-1])),
+            device=reference.device,
+            dtype=reference.dtype,
+        )
+    region_ids = {region_id for route in routes for region_id in route.region_ids}
+    pixel_mask = torch.zeros(
+        (1, 1, runtime.config.height, runtime.config.width),
+        dtype=torch.float32,
+    )
+    for region in runtime.config.regions:
+        if not region.enabled or region.region_id not in region_ids:
+            continue
+        box = region.box.clipped(runtime.config.width, runtime.config.height)
+        x0 = max(0, min(runtime.config.width, int(box.x0)))
+        y0 = max(0, min(runtime.config.height, int(box.y0)))
+        x1 = max(0, min(runtime.config.width, int(ceil(box.x1))))
+        y1 = max(0, min(runtime.config.height, int(ceil(box.y1))))
+        pixel_mask[:, :, y0:y1, x0:x1] = 1.0
+    latent_mask = functional.interpolate(
+        pixel_mask,
+        size=(int(reference.shape[-2]), int(reference.shape[-1])),
+        mode="area",
+    ).to(device=reference.device, dtype=reference.dtype)
+    if int(reference.shape[0]) > 1:
+        latent_mask = latent_mask.repeat(int(reference.shape[0]), 1, 1, 1)
+    return latent_mask.clamp(0.0, 1.0)
+
+
+def pin_regional_latent_to_baseline(regional, baseline, runtime: RuntimeState):
+    """Restore the baseline exactly outside region-assigned LoRA boxes."""
+    mask = regional_lora_latent_mask(runtime, regional)
+    base = baseline.to(device=regional.device, dtype=regional.dtype)
+    return mask * regional + (1.0 - mask) * base, mask
 
 
 def normalize_lora_specs(config: StudioConfig) -> list[dict[str, Any]]:
@@ -573,11 +638,41 @@ def attach_spatial_attention(
 
 def prepare_studio(model, clip, config: StudioConfig, batch_size: int = 1):
     positive, negative, bound, prompt = encode_studio_conditioning(clip, config)
-    patched, projector_report = apply_projector(model, config, bound)
-    patched, lora_reports, statistics = apply_loras(patched, config, bound)
+    projected, projector_report = apply_projector(model, config, bound)
+    patched, lora_reports, statistics = apply_loras(projected, config, bound)
     patched, runtime = attach_spatial_attention(
         patched, config, bound, statistics, lora_reports, projector_report
     )
+    if runtime.strict_lora_isolation:
+        baseline_config = replace(
+            config,
+            loras=tuple(item for item in config.loras if bool(item.get("global", True))),
+        )
+        baseline, baseline_reports, baseline_statistics = apply_loras(
+            projected, baseline_config, bound
+        )
+        baseline, baseline_runtime = attach_spatial_attention(
+            baseline,
+            baseline_config,
+            bound,
+            baseline_statistics,
+            baseline_reports,
+            projector_report,
+        )
+        runtime.baseline_model = baseline
+        runtime.baseline_runtime = baseline_runtime
+        runtime.report["strict_lora_isolation"] = {
+            "enabled": True,
+            "strategy": "matched_baseline_final_latent_pin",
+            "regional_route_count": len(runtime.regional_lora_routes),
+            "extra_sampling_passes": 1,
+        }
+    else:
+        runtime.report["strict_lora_isolation"] = {
+            "enabled": False,
+            "regional_route_count": len(runtime.regional_lora_routes),
+            "extra_sampling_passes": 0,
+        }
     latent = make_empty_latent(patched, config.width, config.height, batch_size)
     mask = region_union_mask(config)
     return {
@@ -597,5 +692,7 @@ __all__ = [
     "ATTACHMENT_KEY",
     "RuntimeState",
     "normalize_lora_specs",
+    "pin_regional_latent_to_baseline",
     "prepare_studio",
+    "regional_lora_latent_mask",
 ]
