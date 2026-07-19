@@ -47,6 +47,7 @@ const HELP = {
   "spatial.subject_fill": "Use stronger coverage toward subject-box edges to reduce unclaimed space inside a subject region.",
   "spatial.lora_delta_adaptation": "Adjust per-region spatial strength from observed LoRA-delta energy while sampling.",
   "spatial.lora_delta_adaptation_gain": "Maximum correction gain used when LoRA-delta adaptation balances regional spatial strength.",
+  "spatial.strict_lora_isolation": "Use the PySide v6/v3 hard subject-text partition and omit standard-LoRA key/value targets that can leak across regions. Keep enabled for regional LoRAs.",
   "projector.enabled": "Apply a selected 12-value delta to Krea's text-fusion projector.",
   "projector.preset": "Named projector-vector preset; custom values can be edited in the JSON pane.",
   "projector.multiplier": "Signed scale applied to every projector preset value; zero disables its effect.",
@@ -76,6 +77,7 @@ const blankConfig = () => ({
     enabled: true, strength: 1, outside_penalty: 1, falloff_pixels: 128,
     subject_competition: true, subject_fill: true, late_step_scale: 0.35,
     lora_delta_adaptation: false, lora_delta_adaptation_gain: 0.35,
+    strict_lora_isolation: true,
   },
   projector: {
     enabled: false, preset: "filter_bypass2", values: Array(12).fill(0),
@@ -83,9 +85,20 @@ const blankConfig = () => ({
   },
   face_detail: {
     enabled: false, steps: 8, denoise: 0.15, crop_size: 512, padding: 2,
-    feather: 0.12, blend: 0.5, lora_scale: 0.5, detector_threshold: 0.4,
+    feather: 0.12, blend: 0.5, lora_scale: 0.5, detector_threshold: 0.15,
   },
 });
+
+const mergedConfig = (supplied = {}) => {
+  const defaults = blankConfig();
+  return {
+    ...defaults,
+    ...supplied,
+    spatial: { ...defaults.spatial, ...(supplied.spatial || {}) },
+    projector: { ...defaults.projector, ...(supplied.projector || {}) },
+    face_detail: { ...defaults.face_detail, ...(supplied.face_detail || {}) },
+  };
+};
 
 const h = (tag, attrs = {}, ...children) => {
   const element = document.createElement(tag);
@@ -174,7 +187,7 @@ class RegionStudio {
   bind(node) {
     this.node = node;
     if (node) {
-      try { this.config = { ...blankConfig(), ...JSON.parse(widget(node, "region_config")?.value || "{}") }; }
+      try { this.config = mergedConfig(JSON.parse(widget(node, "region_config")?.value || "{}")); }
       catch (_) { this.config = blankConfig(); }
       this.status.textContent = `Editing node ${node.id}`;
       this.status.classList.add("connected");
@@ -412,6 +425,7 @@ class RegionStudio {
       check("spatial", "subject_fill", " Fill unclaimed subject space"),
       check("spatial", "lora_delta_adaptation", " LoRA-delta adaptation"),
       number("spatial", "lora_delta_adaptation_gain", "LoRA adaptation gain", 0, 1, .05),
+      check("spatial", "strict_lora_isolation", " Strict regional LoRA isolation"),
       h("h3", {}, "Projector control"), check("projector", "enabled", " Enabled"),
       h("label", { title: HELP["projector.preset"] }, "Preset", h("select", { onChange: (e) => { this.config.projector.preset = e.target.value; this.commit(); } }, ...["filter_bypass2", "filter_bypass3", "skc3vo", "z0jglf", "custom"].map((value) => h("option", { value, selected: value === this.config.projector.preset }, value)))),
       number("projector", "multiplier", "Multiplier", -8, 8, .05),
@@ -435,7 +449,7 @@ class RegionStudio {
       h("div", { class: "k2-json-actions" },
         h("button", { title: HELP.json_copy, onClick: () => navigator.clipboard.writeText(area.value) }, "Copy"),
         h("button", { title: HELP.json_apply, onClick: () => {
-          try { this.config = { ...blankConfig(), ...JSON.parse(area.value) }; this.commit(); message.textContent = "Applied"; }
+          try { this.config = mergedConfig(JSON.parse(area.value)); this.commit(); message.textContent = "Applied"; }
           catch (error) { message.textContent = error.message; }
         } }, "Apply JSON"), message,
       ),

@@ -177,7 +177,10 @@ class RuntimeState:
                 raise RuntimeError(
                     "Krea main-stream attention was not reached by the spatial override"
                 )
-            if self.attention_override.text_refiner_calls == 0:
+            if (
+                self.attention_override.strict_isolation
+                and self.attention_override.text_refiner_calls == 0
+            ):
                 raise RuntimeError(
                     "Krea text-refiner attention was not reached by the regional "
                     "text partition"
@@ -185,8 +188,16 @@ class RuntimeState:
         result["attention_calls"] = (
             self.attention_override.matched_calls if self.attention_override else 0
         )
-        if self.attention_override is not None:
-            result["regional_attention"] = self.attention_override.summary()
+        result["regional_attention"] = (
+            self.attention_override.summary()
+            if self.attention_override
+            else {
+                "strict_lora_isolation": bool(
+                    self.config.spatial.get("strict_lora_isolation", True)
+                ),
+                "status": "disabled",
+            }
+        )
         result["lora_delta_statistics"] = self.lora_statistics.summary()
         return result
 
@@ -434,6 +445,9 @@ def apply_loras(
         bound_plan=bound_plan,
     )
     route_map = {route.lora_id: route for route in routes}
+    strict_isolation = bool(
+        getattr(config, "spatial", {}).get("strict_lora_isolation", True)
+    )
     target_entries: dict[str, list[tuple[Any, LoraDeltaRoute]]] = {}
     skipped_targets: dict[str, list[str]] = {}
     reports: list[dict[str, Any]] = []
@@ -450,7 +464,7 @@ def apply_loras(
             )
         route = route_map[specification["id"]]
         for key, adapter in patches.items():
-            if route_allows_adapter_target(route, str(key)):
+            if not strict_isolation or route_allows_adapter_target(route, str(key)):
                 target_entries.setdefault(key, []).append((adapter, route))
             else:
                 skipped_targets.setdefault(route.lora_id, []).append(str(key))
@@ -467,8 +481,8 @@ def apply_loras(
         report["route"] = route.summary()
         if report["applied_model_targets"] == 0:
             raise ValueError(
-                f"Regional LoRA {report['display_name']!r} has no targets that "
-                "can be routed locally; no LoRA was applied"
+                f"Regional LoRA {report['display_name']!r} has no targets that can "
+                "be routed locally; no LoRA was applied"
             )
         reports.append(report)
         if metadata:
@@ -587,6 +601,7 @@ def attach_spatial_attention(
             lora_delta_adaptation_gain=float(
                 spatial.get("lora_delta_adaptation_gain", 0.35)
             ),
+            strict_isolation=bool(spatial.get("strict_lora_isolation", True)),
         )
         transformer_options = patched.model_options.setdefault("transformer_options", {})
         if "optimized_attention_override" in transformer_options:

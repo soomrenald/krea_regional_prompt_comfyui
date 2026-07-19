@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-k2-region-studio"
-version = "0.2.0"
+version = "0.2.1"
 description = "A graph-native ComfyUI app for Krea 2 regional prompting, regional LoRAs, projector control, face detail, and upscaling."
 requires-python = ">=3.10"
 dependencies = [

@@ -36,6 +36,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "late_step_scale": 0.35,
         "lora_delta_adaptation": False,
         "lora_delta_adaptation_gain": 0.35,
+        "strict_lora_isolation": True,
     },
     "projector": {
         "enabled": False,
@@ -53,7 +54,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "feather": 0.12,
         "blend": 0.5,
         "lora_scale": 0.5,
-        "detector_threshold": 0.4,
+        "detector_threshold": 0.15,
     },
 }
 
@@ -93,6 +94,7 @@ class StudioConfig:
             "lora_count": len(self.loras),
             "emphasis_count": len(self.emphases),
             "regional_prompting": self.regional_plan.summary(),
+            "spatial": dict(self.spatial),
             "projector": dict(self.projector),
             "face_detail": dict(self.face_detail),
         }
@@ -148,6 +150,14 @@ def parse_studio_config(encoded: str, width: int, height: int) -> StudioConfig:
         raise ValueError("emphases must be a JSON array")
     emphases = prompt_emphases_from_payload(emphases_payload)
     spatial = raw["spatial"]
+    if (
+        bool(spatial.get("strict_lora_isolation", True))
+        and any(not bool(item.get("global", True)) for item in loras)
+        and not bool(spatial.get("enabled", True))
+    ):
+        raise ValueError(
+            "strict regional LoRA isolation requires spatial attention to be enabled"
+        )
     plan = compile_regional_prompt_plan(
         aligned_width,
         aligned_height,

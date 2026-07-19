@@ -67,6 +67,7 @@ class KreaSpatialAttentionOverride:
         query_chunk_size: int = 256,
         lora_delta_adaptation: bool = False,
         lora_delta_adaptation_gain: float = 0.35,
+        strict_isolation: bool = True,
     ) -> None:
         self.plan = plan
         self.outside_penalty_ratio = outside_penalty_ratio
@@ -77,6 +78,7 @@ class KreaSpatialAttentionOverride:
         self.query_chunk_size = query_chunk_size
         self.lora_delta_adaptation = lora_delta_adaptation
         self.lora_delta_adaptation_gain = lora_delta_adaptation_gain
+        self.strict_isolation = bool(strict_isolation)
         self.expected_sequence_length = (
             plan.text_token_count + plan.image_token_count
         )
@@ -106,7 +108,8 @@ class KreaSpatialAttentionOverride:
             and int(q.shape[0]) % self.plan.text_token_count == 0
         )
         text_refiner = (
-            query_length == self.plan.text_token_count
+            self.strict_isolation
+            and query_length == self.plan.text_token_count
             and key_length == self.plan.text_token_count
             and not folded_layerwise_text
         )
@@ -148,10 +151,12 @@ class KreaSpatialAttentionOverride:
             end = min(q.shape[-2], start + self.query_chunk_size)
             scores = torch.matmul(q[:, :, start:end], key_transposed) * scale
             scores = scores.float()
-            if main_stream:
+            if main_stream and self.strict_isolation:
                 self._partition_regional_stream(
                     scores, start, end, text_owners, image_owners
                 )
+                self._add_spatial_bias(scores, start, end, pair_fields, emphasis_fields)
+            elif main_stream:
                 self._add_spatial_bias(scores, start, end, pair_fields, emphasis_fields)
             else:
                 self._partition_regional_text(scores, start, end, text_owners)
@@ -328,10 +333,15 @@ class KreaSpatialAttentionOverride:
 
     def summary(self) -> dict[str, object]:
         return {
+            "strict_lora_isolation": self.strict_isolation,
             "text_refiner_attention_calls": self.text_refiner_calls,
-            "text_partition": "subject_keys_private_to_region",
-            "subject_box_exclusion": True,
-            "cross_modal_partition": "subject_text_private_to_box",
+            "text_partition": (
+                "subject_keys_private_to_region" if self.strict_isolation else "disabled"
+            ),
+            "subject_box_exclusion": self.strict_isolation,
+            "cross_modal_partition": (
+                "subject_text_private_to_box" if self.strict_isolation else "soft_bias_only"
+            ),
             "image_to_image_attention": "unmodified",
             "lora_delta_adaptation": self.lora_delta_adaptation,
             "lora_delta_adaptation_gain": self.lora_delta_adaptation_gain,
