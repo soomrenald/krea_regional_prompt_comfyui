@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..k2_region_core.lora import (
     adapter_prefixes,
@@ -135,6 +135,20 @@ class LoraDeltaStatistics:
             state["step_image_energy"] = None
             state["step_image_count"] = 0
 
+    def release_device_state(self) -> None:
+        """Drop per-run tensor accumulators so cached runtimes retain no GPU tensors."""
+        for state in self.values.values():
+            state["text_energy"] = None
+            state["text_count"] = 0
+            state["image_energy"] = None
+            state["image_count"] = 0
+            state["step_text_energy"] = None
+            state["step_text_count"] = 0
+            state["step_image_energy"] = None
+            state["step_image_count"] = 0
+            state["delta_reference"] = None
+            state["calls"] = 0
+
     def summary(self) -> dict[str, Any]:
         return {
             lora_id: {
@@ -156,6 +170,7 @@ class RuntimeState:
     lora_reports: list[dict[str, Any]]
     projector_report: dict[str, Any]
     report: dict[str, Any]
+    device_release_callbacks: tuple[Callable[[], None], ...] = ()
 
     def update_step(self, completed: int, total: int) -> None:
         if self.attention_override is None:
@@ -200,6 +215,14 @@ class RuntimeState:
         )
         result["lora_delta_statistics"] = self.lora_statistics.summary()
         return result
+
+    def release_device_state(self) -> None:
+        """Release GPU-only data owned by a cached Studio model after sampling."""
+        if self.attention_override is not None:
+            self.attention_override.clear()
+        for release in self.device_release_callbacks:
+            release()
+        self.lora_statistics.release_device_state()
 
 
 def normalize_lora_specs(config: StudioConfig) -> list[dict[str, Any]]:
@@ -404,7 +427,24 @@ def _install_routed_loras(model, target_entries, statistics: LoraDeltaStatistics
                 total = total + applied
             return total
 
+        def release_device_state(self) -> None:
+            """Keep reusable adapter weights in RAM, not in the device allocator."""
+            for adapter, _route in self.entries:
+                weights = getattr(adapter, "weights", None)
+                if not isinstance(weights, (tuple, list)):
+                    continue
+                moved = [
+                    weight.detach().to(device="cpu")
+                    if isinstance(weight, torch.Tensor)
+                    else weight
+                    for weight in weights
+                ]
+                adapter.weights = type(weights)(moved)
+            self._prepared.clear()
+            self._mask_cache.clear()
+
     manager = comfy.weight_adapter.BypassInjectionManager()
+    routed_adapters = []
     for key, entries in target_entries.items():
         if not all(isinstance(adapter, base_adapter_type) for adapter, _route in entries):
             raise ValueError(f"unsupported non-adapter regional LoRA patch: {key}")
@@ -417,9 +457,9 @@ def _install_routed_loras(model, target_entries, statistics: LoraDeltaStatistics
             if ".txtfusion." in str(key) or ".txtmlp." in str(key)
             else "combined"
         )
-        manager.add_adapter(
-            key, RoutedCompositeAdapter(entries, route_kind=route_kind), strength=1.0
-        )
+        routed_adapter = RoutedCompositeAdapter(entries, route_kind=route_kind)
+        routed_adapters.append(routed_adapter)
+        manager.add_adapter(key, routed_adapter, strength=1.0)
     patched = model.clone()
     injections = manager.create_injections(patched.model)
     patched.set_injections("k2_region_studio_loras", injections)
@@ -427,7 +467,7 @@ def _install_routed_loras(model, target_entries, statistics: LoraDeltaStatistics
         raise RuntimeError(
             f"installed {manager.get_hook_count()}/{len(target_entries)} routed LoRA hooks"
         )
-    return patched
+    return patched, tuple(adapter.release_device_state for adapter in routed_adapters)
 
 
 def apply_loras(
@@ -488,10 +528,15 @@ def apply_loras(
         if metadata:
             metadata_items.append({"id": route.lora_id, "metadata": metadata})
     statistics = LoraDeltaStatistics(routes)
-    patched = _install_routed_loras(model, target_entries, statistics) if target_entries else model
+    if target_entries:
+        patched, device_release_callbacks = _install_routed_loras(
+            model, target_entries, statistics
+        )
+    else:
+        patched, device_release_callbacks = model, ()
     if metadata_items:
         patched.set_attachments("lora_metadata", metadata_items)
-    return patched, reports, statistics
+    return patched, reports, statistics, device_release_callbacks
 
 
 def apply_projector(model, config: StudioConfig, bound: BoundRegionalPromptPlan):
@@ -639,10 +684,13 @@ def attach_spatial_attention(
 def prepare_studio(model, clip, config: StudioConfig, batch_size: int = 1):
     positive, negative, bound, prompt = encode_studio_conditioning(clip, config)
     patched, projector_report = apply_projector(model, config, bound)
-    patched, lora_reports, statistics = apply_loras(patched, config, bound)
+    patched, lora_reports, statistics, device_release_callbacks = apply_loras(
+        patched, config, bound
+    )
     patched, runtime = attach_spatial_attention(
         patched, config, bound, statistics, lora_reports, projector_report
     )
+    runtime.device_release_callbacks = device_release_callbacks
     latent = make_empty_latent(patched, config.width, config.height, batch_size)
     mask = region_union_mask(config)
     return {

@@ -170,7 +170,7 @@ def test_backend_installs_only_spatially_local_standard_targets(monkeypatch):
     def fake_install(model, target_entries, statistics):
         del statistics
         installed.update(target_entries)
-        return model
+        return model, ()
 
     monkeypatch.setattr(backend, "_install_routed_loras", fake_install)
     config = SimpleNamespace(
@@ -179,7 +179,9 @@ def test_backend_installs_only_spatially_local_standard_targets(monkeypatch):
         regional_plan=plan,
     )
 
-    _model, reports, _statistics = backend.apply_loras(object(), config, bound)
+    _model, reports, _statistics, release_callbacks = backend.apply_loras(
+        object(), config, bound
+    )
 
     assert set(installed) == {
         "diffusion_model.txtfusion.refiner_blocks.0.attn.wq.weight",
@@ -188,6 +190,7 @@ def test_backend_installs_only_spatially_local_standard_targets(monkeypatch):
     assert reports[0]["applied_model_targets"] == 2
     assert reports[0]["locality_skipped_targets"] == 1
     assert reports[0]["application_mode"] == "unfused_region_text_image_delta_gate_v3"
+    assert release_callbacks == ()
 
 
 def test_backend_rejects_regional_lora_when_every_target_would_broadcast(monkeypatch):

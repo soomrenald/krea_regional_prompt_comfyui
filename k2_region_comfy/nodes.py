@@ -268,20 +268,25 @@ class K2RegionalSampler(io.ComfyNode):
                 region_plan.update_step(step + 1, total)
             preview(step, denoised, current, total)
 
-        result = comfy.sample.sample(
-            model, noise, steps, cfg, sampler_name, scheduler, positive, negative,
-            samples, denoise=denoise, noise_mask=latent.get("noise_mask"),
-            callback=callback, disable_pbar=not comfy.utils.PROGRESS_BAR_ENABLED, seed=seed,
-        )
-        output = latent.copy()
-        output.pop("downscale_ratio_spacial", None)
-        output.pop("downscale_ratio_temporal", None)
-        output["samples"] = result
-        report = (
-            region_plan.final_report() if isinstance(region_plan, RuntimeState)
-            else {"status": "sampled", "regional_progress_updates": False}
-        )
-        return io.NodeOutput(output, json.dumps(report, indent=2, default=str))
+        runtime = region_plan if isinstance(region_plan, RuntimeState) else None
+        try:
+            result = comfy.sample.sample(
+                model, noise, steps, cfg, sampler_name, scheduler, positive, negative,
+                samples, denoise=denoise, noise_mask=latent.get("noise_mask"),
+                callback=callback, disable_pbar=not comfy.utils.PROGRESS_BAR_ENABLED, seed=seed,
+            )
+            output = latent.copy()
+            output.pop("downscale_ratio_spacial", None)
+            output.pop("downscale_ratio_temporal", None)
+            output["samples"] = result
+            report = (
+                runtime.final_report() if runtime is not None
+                else {"status": "sampled", "regional_progress_updates": False}
+            )
+            return io.NodeOutput(output, json.dumps(report, indent=2, default=str))
+        finally:
+            if runtime is not None:
+                runtime.release_device_state()
 
 
 class K2FaceDetail(io.ComfyNode):

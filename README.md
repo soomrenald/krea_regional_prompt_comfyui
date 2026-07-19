@@ -64,6 +64,8 @@ Disabling strict isolation restores soft-bias-only prompt routing and permits al
 
 There is no hard-coded GPU size or backend. Resolution, batch size, steps, weight dtype, text-encoder device, VAE placement, model offload, and upscale strategy remain graph or ComfyUI launch settings.
 
+After each sidebar/Studio sampling run, routed LoRA weights are moved back to system RAM and the per-run attention, mask, and statistics caches are cleared. Cleanup also runs when sampling is interrupted or raises an OOM. This prevents ComfyUI's cached patched-model outputs from retaining a separate GPU-resident LoRA copy for every edited `region_config`. The next run re-uploads the active LoRA weights, which adds a small transfer cost but avoids progressive VRAM growth across sidebar edits.
+
 Useful starting points:
 
 | GPU memory | Starting setup |
