@@ -15,6 +15,9 @@ from krea_regional_prompt_comfyui.k2_region_core.regional_lora import (
 from krea_regional_prompt_comfyui.k2_region_core.regional_prompting import (
     compile_regional_prompt_plan,
 )
+from krea_regional_prompt_comfyui.k2_region_core.spatial_attention import (
+    KreaSpatialAttentionOverride,
+)
 from krea_regional_prompt_comfyui.k2_region_core.regions import (
     PixelBox,
     RegionDefinition,
@@ -72,6 +75,34 @@ def test_standard_regional_lora_gates_text_and_skips_main_broadcast_targets():
     assert route_allows_adapter_target(
         route, "diffusion_model.blocks.0.mlp.down.weight"
     )
+
+
+def test_cross_modal_partition_preserves_image_to_image_attention():
+    torch = pytest.importorskip("torch")
+    _plan, bound = plans()
+    override = KreaSpatialAttentionOverride(bound)
+    reference = torch.zeros((1, 1, bound.text_token_count + 2, 1))
+    _fields, _emphases, text_owners, image_owners = override._pair_fields(reference)
+    scores = torch.zeros(
+        (1, 1, bound.text_token_count + 2, bound.text_token_count + 2)
+    )
+
+    override._partition_regional_stream(
+        scores,
+        0,
+        bound.text_token_count + 2,
+        text_owners,
+        image_owners,
+    )
+
+    left, _right = bound.spans
+    left_image = bound.text_token_count
+    right_image = left_image + 1
+    assert torch.isneginf(scores[0, 0, left.start, right_image])
+    assert torch.isneginf(scores[0, 0, right_image, left.start])
+    assert float(scores[0, 0, left_image, right_image]) == 0.0
+    assert float(scores[0, 0, right_image, left_image]) == 0.0
+    assert torch.isneginf(scores[0, 0, 0, left_image])
 
 
 def test_character_route_preserves_anchored_text_and_existing_targets():

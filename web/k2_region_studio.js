@@ -30,7 +30,7 @@ const HELP = {
   lora_model: "LoRA file applied by this assignment.",
   lora_strength: "Model-delta multiplier from -4 to 4; zero disables the assignment and negative values invert it.",
   lora_global: "Apply across all text and image tokens instead of restricting the LoRA to selected regions.",
-  lora_routing: "With Global scope off, Standard makes subject-owned text and image keys private: shared scene keys may feed a subject, but cannot read back and relay its LoRA delta elsewhere. Main-stream attention key/value targets remain omitted. Character identity adds its anchor on top of the same isolation.",
+  lora_routing: "With Global scope off, Standard gates text-fusion deltas to assigned clauses. Off-box image tokens cannot attend those clauses, and other text cannot read image keys in the box. Image-to-image attention remains continuous to avoid rectangular seams. Main-stream attention key/value targets remain omitted. Character identity adds its anchor on top of the same isolation.",
   lora_regions: "Pixel boxes whose regional clauses and compatible LoRA deltas are allowed to condition intersecting Krea image tokens.",
   lora_trigger: "Character trigger phrase appended to an assigned regional clause when character-identity routing is selected in JSON.",
   emphasis_add: "Add an exact-phrase emphasis rule.",
