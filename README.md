@@ -347,7 +347,37 @@ Outputs are regional samples, base samples, the union mask, and a text debug rep
 - Global negative conditioning is output normally. Region-local negative text is preserved in workflow configuration, but the current Krea Turbo CFG-free path has no separate regional negative branch.
 - Cancel, queue, history, workflow embedding, output naming, model unloading, previews, and resource monitoring are provided by ComfyUI.
 
-An editable starter graph is in [`workflows/k2_region_starter.json`](workflows/k2_region_starter.json). Select your locally installed model filenames after loading it.
+Two editable starter graphs are included:
+
+- [`workflows/k2_region_starter.json`](workflows/k2_region_starter.json) is the compact sidebar-driven Studio workflow.
+- [`workflows/k2_bare_kj_ideogram_starter.json`](workflows/k2_bare_kj_ideogram_starter.json) exposes the regional LoRA route as ordinary graph nodes and uses KJNodes' **Ideogram 4 Prompt Builder KJ** as the visual, labeled bounding-box and structured-prompt input.
+
+### Bare KJ/Ideogram starter workflow
+
+The bare KJ starter is deliberately a **single denoising pass**:
+
+```text
+Ideogram 4 Prompt Builder KJ
+  ├─ prompt → native CLIP Text Encode
+  └─ bboxes → K2 BBox To Regional Mask (one node per bbox index)
+                  → K2 Regional Character LoRA
+                  → K2 Regional LoRA Stack 3
+native MODEL ─────→ K2 Regional Layer LoRA Apply
+                  → native KSampler → VAE Decode → K2 Post Upscale → Preview / Save
+```
+
+It does not use `K2 Regional Attention LoRA Sampler` or `K2 Regional Decode Composite`. The layer-apply node installs the region masks on the selected Krea layers, then ComfyUI's native `KSampler` performs one generation. With `outside_strength=0` and `text_token_strength=0`, regional LoRA model deltas are restricted to the selected image-token regions instead of being produced by a second regional sampling pass.
+
+Before queuing the graph:
+
+1. Install or update [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) to a revision containing the `Ideogram4PromptBuilderKJ` node.
+2. Select the locally installed Krea 2 diffusion model, Krea/Qwen text encoder (`type=krea2`), and VAE in the three native loader nodes.
+3. Draw, resize, label, and reorder objects in the KJ builder. Its first object is bbox index `0`, its second is index `1`, and so on. Keep each `K2 BBox To Regional Mask` node's `bbox_index` aligned with that list order.
+4. Select the LoRA file for each region. Set `outside_strength=0` for strict spatial isolation. `overlap_mode=priority_1` makes the first LoRA socket win where boxes overlap; use `normalize` to blend overlapping routes instead.
+5. Keep Krea Turbo's native sampler defaults at CFG `1.0`, sampler `euler`, scheduler `simple`, and start with 8 steps. The negative encoder is intentionally blank because the current Krea Turbo path does not provide useful regional-negative behavior.
+6. The included upscaler uses deterministic Lanczos at 2x. Connect a native **Load Upscale Model** output and change the method to `upscale_model` to use a neural upscaler.
+
+The KJ node's labeled elements are compiled into its structured JSON prompt, while its pixel-space `BOUNDING_BOX` output drives the K2 masks. The graph starts with two subject boxes and two independent regional LoRA bindings; duplicate a bbox/mask/LoRA branch for more subjects. `K2 Regional LoRA Stack 3` accepts three bindings per stack.
 
 ## Development checks
 
