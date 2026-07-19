@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from ..k2_region_core.lora import (
-    CHARACTER_IDENTITY_LORA_ROUTING,
     adapter_prefixes,
     align_krea_lora_state_dict,
     inspect_lora_header,
@@ -77,6 +76,10 @@ class LoraDeltaStatistics:
             text_norms = token_norms
             image_norms = None
             text_observations = (batch // text_count) * enabled_text * int(token_norms.shape[1])
+        elif route_kind == "text_projector":
+            text_norms = token_norms
+            image_norms = None
+            text_observations = batch * enabled_text * int(token_norms.shape[2])
         elif route_kind == "text_refiner":
             text_norms = token_norms
             image_norms = None
@@ -169,9 +172,21 @@ class RuntimeState:
 
     def final_report(self) -> dict[str, Any]:
         result = dict(self.report)
+        if self.attention_override is not None:
+            if self.attention_override.matched_calls == 0:
+                raise RuntimeError(
+                    "Krea main-stream attention was not reached by the spatial override"
+                )
+            if self.attention_override.text_refiner_calls == 0:
+                raise RuntimeError(
+                    "Krea text-refiner attention was not reached by the regional "
+                    "text partition"
+                )
         result["attention_calls"] = (
             self.attention_override.matched_calls if self.attention_override else 0
         )
+        if self.attention_override is not None:
+            result["regional_attention"] = self.attention_override.summary()
         result["lora_delta_statistics"] = self.lora_statistics.summary()
         return result
 
@@ -342,8 +357,7 @@ def _install_routed_loras(model, target_entries, statistics: LoraDeltaStatistics
             key = (
                 route.lora_id,
                 self.route_kind,
-                x.shape[0],
-                x.shape[-2],
+                tuple(x.shape),
                 x.device,
                 x.dtype,
             )
@@ -353,6 +367,11 @@ def _install_routed_loras(model, target_entries, statistics: LoraDeltaStatistics
             if self.route_kind == "text_layerwise":
                 values = route.layerwise_text_batch_mask(int(x.shape[0]))
                 mask = torch.tensor(values, device=x.device, dtype=x.dtype).view(-1, 1, 1)
+            elif self.route_kind == "text_projector":
+                values = route.sequence_mask(int(x.shape[1]), text_fusion=True)
+                mask = torch.tensor(values, device=x.device, dtype=x.dtype).view(
+                    1, -1, 1, 1
+                )
             else:
                 values = route.sequence_mask(
                     int(x.shape[-2]), text_fusion=self.route_kind == "text_refiner"
@@ -381,8 +400,10 @@ def _install_routed_loras(model, target_entries, statistics: LoraDeltaStatistics
         route_kind = (
             "text_layerwise"
             if ".txtfusion.layerwise_blocks." in str(key)
+            else "text_projector"
+            if ".txtfusion.projector." in str(key)
             else "text_refiner"
-            if ".txtfusion." in str(key)
+            if ".txtfusion." in str(key) or ".txtmlp." in str(key)
             else "combined"
         )
         manager.add_adapter(
@@ -437,14 +458,18 @@ def apply_loras(
         report["application_mode"] = (
             "unfused_token_delta_gate"
             if route.global_scope
-            or route.routing_mode == CHARACTER_IDENTITY_LORA_ROUTING
-            else "unfused_image_token_local_delta_gate"
+            else "unfused_region_text_image_delta_gate_v3"
         )
         skipped = skipped_targets.get(route.lora_id, [])
         report["applied_model_targets"] = len(patches) - len(skipped)
         report["locality_skipped_targets"] = len(skipped)
         report["locality_skipped_target_examples"] = skipped[:8]
         report["route"] = route.summary()
+        if report["applied_model_targets"] == 0:
+            raise ValueError(
+                f"Regional LoRA {report['display_name']!r} has no targets that "
+                "can be routed locally; no LoRA was applied"
+            )
         reports.append(report)
         if metadata:
             metadata_items.append({"id": route.lora_id, "metadata": metadata})
@@ -546,6 +571,13 @@ def attach_spatial_attention(
 ):
     spatial = config.spatial
     enabled = bool(spatial.get("enabled", True)) and bool(bound.spans or bound.emphases)
+    if not enabled and any(
+        report.get("status") == "applied_regional" for report in lora_reports
+    ):
+        raise ValueError(
+            "Regional LoRA isolation requires Spatial attention Enabled so its "
+            "regional text cannot become shared scene conditioning"
+        )
     override = None
     patched = model.clone()
     if enabled:

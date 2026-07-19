@@ -56,7 +56,7 @@ The sidebar configuration is serialized into the node’s `region_config` widget
 - **Tuning** exposes inside/outside spatial bias, falloff, subject competition/fill, late-step relaxation, LoRA-delta adaptation, Krea projector settings, and face-detail settings.
 - **JSON** provides lossless import/export and direct access to token emphasis arrays, custom projector vectors, and future fields.
 
-Regional LoRAs use unfused forward adapters, and the base FP8 weights are not rewritten. Standard regional routing is image-token-only: it applies query, gate, attention-output, and MLP deltas only to image tokens intersecting the assigned boxes. Text-fusion and attention key/value targets are omitted for standard regional routes because those paths are shared with every image query and cannot be made spatially local by masking their linear output. Character-identity routing retains its dedicated anchored regional-text behavior.
+Regional LoRAs use unfused forward adapters, and the base FP8 weights are not rewritten. Standard regional routing gates text-fusion deltas to each assigned regional clause and compatible main-stream deltas to image tokens intersecting the assigned boxes. Subject-owned text and image keys are private: shared scene keys may feed each subject, but shared keys and other subjects cannot read back from a subject and relay its delta elsewhere. A text-fusion-only LoRA therefore does not become shared conditioning through global text or later image-to-image attention. Main-stream attention key/value targets remain omitted because their projections broadcast before output gating. Character-identity routing uses the same isolation and additionally inserts its dedicated regional identity anchor. This is one denoising pass; there is no second sampler pass or image-space compositing boundary.
 
 ## Any GPU size: tuning and memory
 
@@ -165,9 +165,9 @@ The outputs are the patched model, original clip, compiled positive/negative con
 | `+ LoRA` | — | Adds an assignment using ComfyUI's current `models/loras` inventory. |
 | `Model` | First available LoRA | LoRA file to validate against and apply to the active Krea model. Incompatible namespaces are reported instead of silently doing nothing. |
 | `Strength` | `1.0` | Model-delta multiplier from `-4` to `4`. Zero disables the assignment; negative values invert its learned delta. |
-| `Routing` | `standard` | With Global scope off, `standard` is image-token-only and omits text-fusion plus attention key/value targets that would broadcast the effect. `character_identity` requires at least one selected region and a trigger phrase; it retains the established anchored regional-text behavior. |
+| `Routing` | `standard` | With Global scope off, `standard` gates text-fusion deltas to assigned clauses and makes subject-owned text/image keys private while still allowing shared scene keys to feed the subject. Compatible main-stream deltas use the selected boxes; main-stream attention key/value targets remain omitted. `character_identity` requires a selected region and trigger phrase and adds an identity anchor on top of the same isolation. |
 | `Global scope` | Enabled | Applies the LoRA to all text and image lanes. Disable it to expose the region checklist and use strict regional routing. |
-| `Regions` | None | Union of named regions receiving a non-global LoRA. Standard-routing deltas are enabled only on image tokens intersecting these strict pixel boxes. |
+| `Regions` | None | Union of named regions receiving a non-global LoRA. The regional clause and LoRA text delta can condition only image tokens intersecting these boxes; compatible main-stream deltas use the same strict boxes. |
 | `Trigger phrase` | Empty | Character activation phrase used by `character_identity` routing. It must be non-empty in that mode and should match the phrase learned during LoRA training. |
 
 ### Sidebar: Emphasis
@@ -183,10 +183,10 @@ The outputs are the patched model, original clip, compiled positive/negative con
 
 | Control | Default | Description |
 | --- | --- | --- |
-| `Enabled` | On | Installs the Krea spatial-attention override. With it off, prompts and LoRAs still compile, but regional attention and emphasis bias are not applied. |
+| `Enabled` | On | Installs the Krea text partition and spatial-attention router. It may be disabled only when no regional LoRA is active; otherwise compilation fails rather than allowing a text-fusion LoRA to leak through shared conditioning. |
 | `Inside strength` | `1.0` | Positive attention-logit bias inside each region. Larger values bind regional text more strongly to its image-token field. |
-| `Outside penalty` | `1.0` | Negative attention-logit bias outside subject regions. Background regions use one quarter of this penalty. Larger values reduce prompt leakage but can make transitions rigid. |
-| `Edge falloff (px)` | `128` | Distance beyond a box over which its soft attention field fades. Zero produces a hard attention edge. Regional LoRA image gates remain strict boxes regardless of falloff. |
+| `Outside penalty` | `1.0` | Increases center-to-edge contrast inside a subject box; subject text is hard-blocked outside its box. Background regions use one quarter of this penalty and can still feather outside their boxes. |
+| `Edge falloff (px)` | `128` | Distance beyond a background box over which its soft attention field fades. Subject prompt and text-fusion LoRA conditioning remains hard-confined to image tokens intersecting the subject box. |
 | `Late-step scale` | `0.35` | Fraction of spatial strength retained at the final denoising step. Relaxation begins after 55% progress and interpolates toward this value. Requires `region_plan` on K2 Regional Sampler. |
 | `Subject competition` | On | In overlaps between two or more subject regions, assigns soft ownership proportional to squared regional field strength so all subjects do not fully claim the same token. |
 | `Fill unclaimed subject space` | On | Keeps a stronger field toward subject-box edges, reducing weak/unclaimed space inside a subject box. |

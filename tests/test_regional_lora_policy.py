@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from krea_regional_prompt_comfyui.k2_region_comfy import backend
 from krea_regional_prompt_comfyui.k2_region_core.lora import (
     CHARACTER_IDENTITY_LORA_ROUTING,
@@ -36,7 +38,7 @@ def plans(*, character_trigger: str | None = None):
     return plan, bound
 
 
-def test_standard_regional_lora_is_image_only_and_skips_broadcast_targets():
+def test_standard_regional_lora_gates_text_and_skips_main_broadcast_targets():
     plan, bound = plans()
     route = compile_lora_delta_routes(
         [{"id": "style", "global": False, "region_ids": ["right"]}],
@@ -47,9 +49,12 @@ def test_standard_regional_lora_is_image_only_and_skips_broadcast_targets():
         bound_plan=bound,
     )[0]
 
-    assert route.text_token_mask == (0.0,) * bound.text_token_count
+    right = next(span for span in bound.spans if span.region_id == "right")
+    assert {index for index, value in enumerate(route.text_token_mask) if value} == set(
+        range(right.start, right.end)
+    )
     assert route.image_token_mask == (0.0, 1.0)
-    assert not route_allows_adapter_target(
+    assert route_allows_adapter_target(
         route, "diffusion_model.txtfusion.refiner_blocks.0.attn.wq.weight"
     )
     assert not route_allows_adapter_target(
@@ -145,7 +150,59 @@ def test_backend_installs_only_spatially_local_standard_targets(monkeypatch):
 
     _model, reports, _statistics = backend.apply_loras(object(), config, bound)
 
-    assert set(installed) == {"diffusion_model.blocks.0.attn.wo.weight"}
-    assert reports[0]["applied_model_targets"] == 1
-    assert reports[0]["locality_skipped_targets"] == 2
-    assert reports[0]["application_mode"] == "unfused_image_token_local_delta_gate"
+    assert set(installed) == {
+        "diffusion_model.txtfusion.refiner_blocks.0.attn.wq.weight",
+        "diffusion_model.blocks.0.attn.wo.weight",
+    }
+    assert reports[0]["applied_model_targets"] == 2
+    assert reports[0]["locality_skipped_targets"] == 1
+    assert reports[0]["application_mode"] == "unfused_region_text_image_delta_gate_v3"
+
+
+def test_backend_rejects_regional_lora_when_every_target_would_broadcast(monkeypatch):
+    plan, bound = plans()
+    specification = {
+        "id": "broadcast-only",
+        "name": "Broadcast only",
+        "path": "/unused/broadcast.safetensors",
+        "strength": 1.0,
+        "global": False,
+        "region_ids": ["right"],
+        "routing_mode": "standard",
+        "trigger_phrase": "",
+    }
+    monkeypatch.setattr(backend, "normalize_lora_specs", lambda config: [specification])
+    monkeypatch.setattr(
+        backend,
+        "_load_lora_patches",
+        lambda model, supplied: (
+            {"diffusion_model.blocks.0.attn.wv.weight": object()},
+            None,
+            {
+                "id": supplied["id"],
+                "display_name": supplied["name"],
+                "adapter_count": 1,
+                "matched_model_targets": 1,
+                "compatible": True,
+            },
+        ),
+    )
+    config = SimpleNamespace(width=32, height=16, regional_plan=plan)
+
+    with pytest.raises(ValueError, match="no targets that can be routed locally"):
+        backend.apply_loras(object(), config, bound)
+
+
+def test_backend_requires_spatial_router_for_a_regional_lora():
+    _plan, bound = plans()
+    config = SimpleNamespace(spatial={"enabled": False})
+
+    with pytest.raises(ValueError, match="requires Spatial attention Enabled"):
+        backend.attach_spatial_attention(
+            object(),
+            config,
+            bound,
+            backend.LoraDeltaStatistics(()),
+            [{"status": "applied_regional"}],
+            {},
+        )
